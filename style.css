@@ -147,3 +147,26 @@ button.big { font-size: 19px; padding: 15px 22px; border-color: rgba(200,60,60,.
 #inv-confirm p { font-size: 15px; line-height: 1.7; letter-spacing: .06em; color: #f0d0c8; }
 #inv-confirm b { color: #ff4a3a; letter-spacing: .3em; }
 #inv-confirm div { display: flex; gap: 14px; margin-top: 14px; }
+#world-panel {
+  position: fixed; z-index: 60; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(32rem, 90vw); max-height: 83vh; overflow: auto;
+  padding: 1.6rem; color: #e6e9df; background: #141a18;
+  border: 1px solid #52685c; box-shadow: 0 0 0 200vmax #0009;
+}
+#world-panel button { display: block; margin: 0.55rem 0; width: 100%; }
+#world-panel p { line-height: 1.55; }
+#world-panel canvas { display: block; margin: 0 auto 1rem; }
+#companion-hud {
+  position: absolute; right: 26px; top: 185px; padding: 0.55rem 0.7rem;
+  border: 1px solid #52685c; background: #101713cc; color: #dce9df;
+}
+#companion-hud strong, #companion-hud progress, #companion-hud small { display: block; }
+#companion-hud progress { width: 100%; height: 0.68rem; accent-color: #87ad87; }
+#travel-fade { position: fixed; inset: 0; z-index: 90; background: #000; opacity: 0; pointer-events: none; transition: opacity 200ms; }
+#travel-fade.opaque { opacity: 1; pointer-events: auto; }
+#rain-streaks {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0;
+  background: repeating-linear-gradient(109deg, transparent 0 8.1vw, #b6cddd30 8.15vw, transparent 8.28vw 13.6vw);
+  mask-image: linear-gradient(transparent, #0008 35%, black);
+}
+#save-status:empty { display: none; }

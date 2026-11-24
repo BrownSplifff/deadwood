@@ -112,7 +112,7 @@ export class Dogs {
       if (d.dist > 260) { this.scene.remove(P.root); this.list.splice(i, 1); continue; }
       // ---- AI
       let speed = 0, tx = d.x, tz = d.z;
-      if (alive && (d.dist < CFG.detect || d.state === 'chase')) d.state = 'chase';
+      if (alive && (d.dist < CFG.detect * (this.detectMul ?? 1) || d.state === 'chase')) d.state = 'chase';
       if (!alive) d.state = 'roam';
       if (d.state === 'roam') {
         const pk = d.pack; pk.t -= dt;

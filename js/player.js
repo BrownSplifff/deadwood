@@ -30,10 +30,11 @@ export class Player {
   toggleSit() { this.sitting = !this.sitting; }
 
   update(dt, keys, ctx) {
-    const sit = this.sitting;
+    const mount = ctx.mount;
+    const sit = !mount && this.sitting;
     let fz = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), rx = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
     if (sit || !ctx.canMove) { fz = 0; rx = 0; }
-    const crouch = !sit && (keys.ControlLeft || keys.ControlRight || keys.KeyC);
+    const crouch = !mount && !sit && (keys.ControlLeft || keys.ControlRight || keys.KeyC);
     this.crouching = !!crouch;
     const moving = fz !== 0 || rx !== 0;
     const wantSprint = (keys.ShiftLeft || keys.ShiftRight) && fz > 0 && !crouch && !sit && !ctx.aiming && !ctx.firing;
@@ -42,7 +43,8 @@ export class Player {
 
     let target = PCFG.walk;
     if (this.sprinting) target = PCFG.sprint; else if (crouch) target = PCFG.crouch; else if (ctx.aiming) target = PCFG.ads;
-    target *= ctx.speedMul ?? 1;
+    target = mount ? (this.sprinting ? mount.run : mount.walk) * mount.bonus : target * (ctx.speedMul ?? 1);
+    target *= ctx.weatherSpeed ?? 1;
     this.inWater = this.world.isWater(this.pos.x, this.pos.z);
     if (this.inWater) target *= 0.55;
     // wish direction
@@ -64,14 +66,24 @@ export class Player {
     if (ctx.passiveDrain) this.stamina = Math.max(0, this.stamina - ctx.passiveDrain * dt);
 
     // jump + gravity
-    if (keys.Space && this.onGround && !sit && ctx.canMove) { this.vy = PCFG.jump; this.onGround = false; this.audio.jump(); this.stamina = Math.max(0, this.stamina - 6); }
+    if ((!mount || mount.jump) && keys.Space && this.onGround && !sit && ctx.canMove) { this.vy = PCFG.jump; this.onGround = false; this.audio.jump(); this.stamina = Math.max(0, this.stamina - 6); }
     if (!PCFG.staminaDrain) { this.stamina = PCFG.maxStamina; this.exhausted = false; }
     this.vy -= PCFG.gravity * dt;
     this.pos.x += this.vx * dt; this.pos.z += this.vz * dt; this.pos.y += this.vy * dt;
-    this.world.resolve(this.pos, PCFG.radius, this.pos.y);
+    this.world.resolve(this.pos, mount?.radius ?? PCFG.radius, this.pos.y);
+    if (mount) {
+      const length = Math.hypot(this.vx, this.vz);
+      if (length > 0.1) for (const sign of [-1, 1]) {
+        const dx = this.vx / length * sign * 0.65, dz = this.vz / length * sign * 0.65;
+        const end = { x: this.pos.x + dx, z: this.pos.z + dz };
+        this.world.resolve(end, mount.radius * 0.8, this.pos.y);
+        this.pos.x = end.x - dx; this.pos.z = end.z - dz;
+      }
+    }
 
     const ceil = this.world.ceilingAt ? this.world.ceilingAt(this.pos.x, this.pos.z) : Infinity;
-    if (this.pos.y + 1.95 > ceil) { this.pos.y = ceil - 1.95; if (this.vy > 0) this.vy = 0; }
+    const height = mount ? mount.eye + 0.35 : 1.95;
+    if (this.pos.y + height > ceil) { this.pos.y = ceil - height; if (this.vy > 0) this.vy = 0; }
     const g = this.world.hgt(this.pos.x, this.pos.z);
     if (this.pos.y <= g) {
       if (!this.onGround && this.vy < -7) this.audio.land();
@@ -82,17 +94,21 @@ export class Player {
     this.hspeed = Math.hypot(this.vx, this.vz);
 
     // eye height transitions
-    const eyeT = sit ? PCFG.eyeSit : crouch ? PCFG.eyeCrouch : PCFG.eyeStand;
+    const eyeT = mount ? mount.eye : sit ? PCFG.eyeSit : crouch ? PCFG.eyeCrouch : PCFG.eyeStand;
     this.eyeH = damp(this.eyeH, eyeT, 9, dt);
 
     // head bob + footsteps
     if (this.onGround && this.hspeed > 0.4) {
       this.bobPhase += this.hspeed * dt * 1.5;
       const amp = clamp(this.hspeed / PCFG.sprint, 0, 1);
-      this.bobY = Math.sin(this.bobPhase * 2) * 0.035 * (0.4 + amp);
+      this.bobY = Math.sin(this.bobPhase * 2) * (mount ? 0.075 : 0.035) * (0.4 + amp);
       this.bobX = Math.cos(this.bobPhase) * 0.02 * (0.4 + amp);
       const idx = Math.floor(this.bobPhase / Math.PI);
-      if (idx !== this.stepIdx) { this.stepIdx = idx; if (this.inWater) this.audio.splash(); else this.audio.step(this.sprinting ? 1 : crouch ? 0.25 : 0.6); }
+      if (idx !== this.stepIdx) {
+        this.stepIdx = idx;
+        if (this.inWater) this.audio.splash(); else this.audio.step(this.sprinting ? 1 : crouch ? 0.25 : 0.6);
+        ctx.onStep?.(this.sprinting);
+      }
     } else { this.bobY = damp(this.bobY, 0, 8, dt); this.bobX = damp(this.bobX, 0, 8, dt); }
   }
 
