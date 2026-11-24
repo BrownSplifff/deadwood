@@ -16,7 +16,7 @@ export const CH = 100, NCH = SIZE / CH;           // chunk size / chunks per sid
 const CELL = 10, CPC = CH / CELL;                 // collision cell size / cells per chunk side
 const GN = SIZE / CELL;
 const REG = 500, NR = SIZE / REG;                 // regions used for village / pond placement
-const SEED = 1337;
+export const SEED = 1337;
 const WATER_Y = 0;
 export const CABIN = { x: -38, z: -32 };
 export const CAMP = { x: 14, z: 10 };
@@ -345,12 +345,35 @@ export function createWorld(scene) {
     });
     const moonSpr = new THREE.Sprite(W.moonMat);
     moonSpr.scale.set(70, 70, 1); moonSpr.position.copy(moonDir).multiplyScalar(340);
+    const moonGlow = radialTex([[0, '#e45439'], [0.62, '#981d13'], [0.70, 'rgba(160,22,12,0.22)'], [1, 'rgba(90,0,0,0)']]);
+    const ctx = moonGlow.image.getContext('2d');
+    const radius = ctx.canvas.width * 0.31;
+    const center = ctx.canvas.width / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, Math.PI * 2);
+    ctx.clip();
+    for (let i = 0; i < 180; i++) {
+      const x = center + (hash2(i, 13) * 2 - 1) * radius;
+      const y = center + (hash2(i, 19) * 2 - 1) * radius;
+      const r = radius * (0.01 + 0.18 * hash2(i, 31) ** 3);
+      const crater = ctx.createRadialGradient(x, y, 0, x, y, r);
+      crater.addColorStop(0, 'rgba(66,3,9,0.55)');
+      crater.addColorStop(0.72, 'rgba(92,8,12,0.30)');
+      crater.addColorStop(0.87, 'rgba(253,116,74,0.32)');
+      crater.addColorStop(1, 'rgba(253,116,74,0)');
+      ctx.fillStyle = crater;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    ctx.restore();
+    moonGlow.needsUpdate = true;
     W.redMoonMat = new THREE.SpriteMaterial({
-      map: radialTex([[0, '#ffd8c8'], [0.16, '#ff7050'], [0.21, '#c0281a'], [0.5, 'rgba(170,20,10,0.25)'], [1, 'rgba(90,0,0,0)']]),
+      map: moonGlow,
       fog: false, depthWrite: false, transparent: true,
     });
     const redSpr = new THREE.Sprite(W.redMoonMat);
-    redSpr.scale.set(62, 62, 1); redSpr.position.copy(redDir).multiplyScalar(335);
+    redSpr.scale.set(210, 210, 1); redSpr.position.copy(redDir).multiplyScalar(335);
+    redSpr.renderOrder = -1;
     W.sky = new THREE.Group(); W.sky.add(dome, stars, moonSpr, redSpr);
     scene.add(W.sky);
   }
@@ -376,13 +399,15 @@ export function createWorld(scene) {
     cd.cells[(gz - cd.cz * CPC) * CPC + (gx - cd.cx * CPC)].push(c);
     return c;
   }
-  function addBox(x0, x1, z0, z1, y0, y1, kind = 'wood') {
-    const b = { x0, x1, z0, z1, y0, y1, kind, stamp: 0 };
+  function addBox(x0, x1, z0, z1, y0, y1, kind = 'wood', walkable = false) {
+    const b = { x0, x1, z0, z1, y0, y1, kind, walkable, stamp: 0 };
     for (let gz = cIdx(z0 - 1); gz <= cIdx(z1 + 1); gz++) for (let gx = cIdx(x0 - 1); gx <= cIdx(x1 + 1); gx++) {
       const k = gz * GN + gx; (boxCells.get(k) || boxCells.set(k, []).get(k)).push(b);
     }
     return b;
   }
+  W.addWaystoneCollider = (x, z, y) => addBox(x - 0.51, x + 0.51, z - 0.51, z + 0.51, y, y + 3.7, 'rock');
+  W.addRailCollider = addBox;
   const alive = (c) => c.q === undefined || c.q < W.treeFrac;
   let stampN = 0;
 
@@ -401,7 +426,7 @@ export function createWorld(scene) {
     const boxes = cellBoxes(cx, cz);
     for (let i = 0; i < boxes.length; i++) {
       const b = boxes[i];
-      if (y > b.y1) continue;
+      if (b.walkable || y > b.y1) continue;
       const qx = clamp(p.x, b.x0, b.x1), qz = clamp(p.z, b.z0, b.z1);
       const dx = p.x - qx, dz = p.z - qz, d2 = dx * dx + dz * dz;
       if (d2 < r * r && d2 > 1e-8) { const d = Math.sqrt(d2), push = r - d; p.x += dx / d * push; p.z += dz / d * push; }
@@ -418,7 +443,7 @@ export function createWorld(scene) {
     for (let gz = Math.max(0, cz - 1); gz <= Math.min(GN - 1, cz + 1); gz++)
       for (let gx = Math.max(0, cx - 1); gx <= Math.min(GN - 1, cx + 1); gx++)
         for (const c of cellCircles(gx, gz)) if (alive(c) && Math.hypot(x - c.x, z - c.z) < r + c.r) return true;
-    for (const b of cellBoxes(cx, cz)) if (x > b.x0 - r && x < b.x1 + r && z > b.z0 - r && z < b.z1 + r) return true;
+    for (const b of cellBoxes(cx, cz)) if (!b.walkable && x > b.x0 - r && x < b.x1 + r && z > b.z0 - r && z < b.z1 + r) return true;
     return false;
   };
   W.inBuilding = (x, z, pad = 0) => {
@@ -447,6 +472,7 @@ export function createWorld(scene) {
       for (let gx = Math.max(0, cx - 1); gx <= Math.min(GN - 1, cx + 1); gx++)
         for (const c of cellCircles(gx, gz)) if (alive(c) && c.h > 0.6) apply(c.x, c.z, c.r);
     for (const b of cellBoxes(cx, cz)) {
+      if (b.walkable) continue;
       const qx = clamp(px, b.x0, b.x1), qz = clamp(pz, b.z0, b.z1);
       if (Math.abs(px - qx) < 3 && Math.abs(pz - qz) < 3) apply(qx, qz, 0.2);
     }
@@ -510,6 +536,10 @@ export function createWorld(scene) {
   }, 1);
   const groundMat = new THREE.MeshLambertMaterial({ vertexColors: true, map: groundTex });
   const vcMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  W.setRainTint = (wet) => {
+    groundMat.color.setScalar(1 - wet * 0.32);
+    vcMat.color.setScalar(1 - wet * 0.17);
+  };
   const treeGeo = (() => {
     const parts = [{ geo: new THREE.CylinderGeometry(0.17, 0.32, 3.2, 6).translate(0, 1.6, 0), color: 0x3a281a }];
     [[2.5, 3.2, 1.7], [2.1, 3.0, 3.5], [1.7, 2.8, 5.3], [1.25, 2.6, 7.0], [0.8, 2.4, 8.7]].forEach(([r, h, y], i) => {
@@ -522,6 +552,32 @@ export function createWorld(scene) {
     { geo: new THREE.ConeGeometry(2.4, 5.8, 5, 1, true).translate(0, 1.7 + 2.9, 0), color: 0x12321d },
     { geo: new THREE.ConeGeometry(1.6, 5.0, 5, 1, true).translate(0, 5.4 + 2.5, 0), color: 0x1a4426 },
   ]);
+  const deepForest = (x, z) => smoothstep(100, 190, Math.hypot(x - CAMP.x, z - CAMP.z))
+    * (1 - ringWeight(x, z)) * (1 - desertWeight(x, z));
+  const ancientTree = (detail) => {
+    const parts = [
+      { geo: new THREE.CylinderGeometry(0.24, 1, 0.94, detail ? 9 : 5).translate(0, 0.46, 0), color: 0x392b24 },
+      { geo: new THREE.IcosahedronGeometry(1, detail ? 1 : 0).scale(4.2, 0.18, 4.2).translate(0, 0.81, 0), color: 0x142720 },
+    ];
+    for (let i = 0; i < (detail ? 6 : 3); i++) {
+      const a = i * 2.39996;
+      const x = Math.cos(a), z = Math.sin(a);
+      const y = 0.33 + i * 0.07;
+      const from = new THREE.Vector3(0, y, 0), to = new THREE.Vector3(x * 3, y + 0.1, z * 3);
+      const axis = to.clone().sub(from);
+      const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.clone().normalize());
+      const branch = new THREE.CylinderGeometry(0.08, 0.32, axis.length(), detail ? 6 : 4);
+      branch.applyQuaternion(rotation).translate(x * 1.5, y + 0.05, z * 1.5);
+      parts.push({ geo: branch, color: 0x30251d });
+      parts.push({ geo: new THREE.IcosahedronGeometry(1, 0).scale(2.9, 0.09, 2.9).translate(x * 2.7, y + 0.12, z * 2.7), color: 0x172d21 });
+      if (detail) {
+        const root = new THREE.IcosahedronGeometry(1, 0).scale(2, 0.024, 0.36).rotateY(-a);
+        parts.push({ geo: root.translate(x * 1.4, 0.004, z * 1.4), color: 0x3a3225 });
+      }
+    }
+    return mergeGeos(parts);
+  };
+  const ancientGeo = ancientTree(true), ancientLowGeo = ancientTree(false);
   const deadTreeGeo = mergeGeos([
     { geo: new THREE.CylinderGeometry(0.16, 0.34, 7.5, 6).translate(0, 3.75, 0), color: 0x2e2620 },
     { geo: new THREE.CylinderGeometry(0.06, 0.13, 2.6, 5).rotateZ(-Math.PI / 2 + 0.12).translate(1.25, 5.05, 0), color: 0x2e2620 },
@@ -541,13 +597,22 @@ export function createWorld(scene) {
     { geo: new THREE.ConeGeometry(0.15, 0.1, 4).rotateY(Math.PI / 4).translate(0.38, 1.79, 0), color: 0x2a2420 },
   ]);
   const lanternGlowMat = new THREE.SpriteMaterial({ map: radialTex([[0, 'rgba(255,230,160,1)'], [0.25, 'rgba(255,170,60,0.7)'], [1, 'rgba(255,120,20,0)']]), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+  const hangingCase = new THREE.CylinderGeometry(0.15, 0.22, 0.42, 6);
+  const hangingChain = new THREE.CylinderGeometry(0.018, 0.018, 1, 4);
+  const hangingMetal = new THREE.MeshLambertMaterial({ color: 0x43332b });
   W.lanternSprites = [];
   const bushGeo = mergeGeos([
     { geo: new THREE.IcosahedronGeometry(0.7, 0).translate(0, 0.5, 0), color: 0x1b3a1c },
     { geo: new THREE.IcosahedronGeometry(0.5, 0).translate(0.55, 0.38, 0.2), color: 0x234a24 },
     { geo: new THREE.IcosahedronGeometry(0.45, 0).translate(-0.45, 0.35, -0.25), color: 0x16301a },
   ]);
+  const fernGeo = mergeGeos(Array.from({ length: 7 }, (_, i) => {
+    const a = i * 2.39996;
+    return { geo: new THREE.PlaneGeometry(0.7, 1.8, 1, 3).rotateX(-0.56).translate(0, 0.55, 0.63).rotateY(a),
+      color: i % 2 ? 0x375b31 : 0x25452c };
+  }));
   const rockGeo = part(new THREE.DodecahedronGeometry(1, 0), null, 0x5b6068);
+  const mossGeo = part(new THREE.IcosahedronGeometry(1, 0), null, 0x53633b);
   const logGeo = mergeGeos([
     { geo: new THREE.CylinderGeometry(0.3, 0.34, 4.6, 7).rotateZ(Math.PI / 2), color: 0x4b3624 },
     { geo: new THREE.CylinderGeometry(0.06, 0.1, 0.9, 5).rotateZ(1.0).translate(0.8, 0.3, 0.1), color: 0x3a291b },
@@ -699,22 +764,42 @@ export function createWorld(scene) {
           if (rng() > fw(x, z) * (1 - ringWeight(x, z))) continue;
           if (nearSite(x, z, 2) || pathDist(x, z) < 3 || clearingDist(x, z) < 0 || wet(x, z, 0.6)) continue;
           const s = R(0.75, 1.5) * (1 + dn * 0.25), q = rng();
-          cd.trees.push({ x, z, s, q, ry: R(0, 6.28), tx: R(-0.04, 0.04), tz: R(-0.04, 0.04), tint: R(0.7, 1.15) * (1 - dn * 0.25) });
-          addCircle(cd, x, z, 0.38 * s, 16 * s, 'wood', q);
+          const tree = { x, z, s, q, ry: R(0, 6.28), tx: R(-0.04, 0.04), tz: R(-0.04, 0.04), tint: R(0.7, 1.15) * (1 - dn * 0.25) };
+          const deep = deepForest(x, z);
+          if (deep > hash2(x, z, 211)) {
+            if (Math.sin(x * 0.084) * Math.cos(z * 0.076) > 0.78) continue;
+            if (k !== 0 || hash2(x, z, 241) > 0.32 || pathDist(x, z) < 5) continue;
+            tree.radius = 1 + hash2(x, z, 251) * 1.5;
+            tree.height = 25 + hash2(x, z, 281) * 35;
+            tree.tx *= 0.3;
+            tree.tz *= 0.3;
+          }
+          if (W.railway?.treeClear(x, z)) continue;
+          cd.trees.push(tree);
+          addCircle(cd, x, z, tree.radius ?? 0.38 * s, tree.height ?? 16 * s, 'wood', q);
+          if (tree.radius) for (let i = 0; i < 3; i++) {
+            const a = i * 2.39996 - tree.ry;
+            const rx = x + Math.cos(a) * tree.radius * 1.8, rz = z + Math.sin(a) * tree.radius * 1.8;
+            if (rx >= x0 && rx < x0 + CH && rz >= z0 && rz < z0 + CH && pathDist(rx, rz) > 2.5) {
+              addCircle(cd, rx, rz, tree.radius * 0.45, Math.min(0.6, tree.height * 0.019), 'wood', q);
+            }
+          }
         }
       }
       // bushes
       for (let i = 0; i < 72; i++) {
         const x = R(x0, x0 + CH - 0.01), z = R(z0, z0 + CH - 0.01), dn = denseF(x, z);
         if (rng() > (0.45 + dn * 0.55) * fw(x, z) || W.inBuilding(x, z, 1) || Math.hypot(x - CAMP.x, z - CAMP.z) < 5 || pathDist(x, z) < 1.6 || wet(x, z, 0.2)) continue;
-        cd.bushes.push({ x, z, s: R(0.8, 1.9), a: R(0, 6.28), t: R(0.7, 1.2) * (1 - dn * 0.3) });
+        cd.bushes.push({ x, z, s: R(0.8, 1.9) * (1 + deepForest(x, z) * 0.8), a: R(0, 6.28), t: R(0.7, 1.2) * (1 - dn * 0.3) });
       }
       // rocks
       for (let i = 0; i < 9; i++) {
         const x = R(x0 + 2, x0 + CH - 2), z = R(z0 + 2, z0 + CH - 2);
         if (nearSite(x, z) || pathDist(x, z) < 2.5 || W.inBuilding(x, z, 2) || fw(x, z) < 0.5) continue;
         const s = R(0.5, 1.8), sx = s * R(0.9, 1.6), sy = s * R(0.55, 1.1);
-        cd.rocks.push({ x, z, sx, sy, sz: sx * R(0.8, 1.2), e: [R(-0.3, 0.3), R(0, 6.28), R(-0.3, 0.3)], t: R(0.6, 1.2) });
+        const rock = { x, z, sx, sy, sz: sx * R(0.8, 1.2), e: [R(-0.3, 0.3), R(0, 6.28), R(-0.3, 0.3)], t: R(0.6, 1.2) };
+        if (W.railway?.treeClear(x, z)) continue;
+        cd.rocks.push(rock);
         addCircle(cd, x, z, sx * 0.82, sy * 1.2, 'rock');
       }
       // fallen logs
@@ -722,8 +807,17 @@ export function createWorld(scene) {
         const x = R(x0 + 4, x0 + CH - 4), z = R(z0 + 4, z0 + CH - 4);
         if (rng() < 0.3 || nearSite(x, z) || pathDist(x, z) < 3 || wet(x, z, 0.3) || fw(x, z) < 0.5) continue;
         const a = R(0, Math.PI);
-        cd.logs.push({ x, z, a });
-        for (const o of [-1.5, 0, 1.5]) { const lx = x + Math.cos(a) * o, lz = z - Math.sin(a) * o; if (lx >= x0 && lx < x0 + CH && lz >= z0 && lz < z0 + CH) addCircle(cd, lx, lz, 0.4, 0.7, 'wood'); }
+        const scale = deepForest(x, z) > 0.55 && pathDist(x, z) > 11 &&
+          Math.min(x - x0, x0 + CH - x, z - z0, z0 + CH - z) > 9 ? 3.2 : 1;
+        const along = scale > 1 ? [-6.4, -4.8, -3.2, -1.6, 0, 1.6, 3.2, 4.8, 6.4] : [-1.5, 0, 1.5];
+        const clear = along.every((o) => pathDist(x + Math.cos(a) * o, z - Math.sin(a) * o) > 2.8);
+        const size = clear ? scale : 1;
+        if (W.railway?.treeClear(x, z)) continue;
+        cd.logs.push({ x, z, a, size });
+        for (const o of size > 1 ? along : [-1.5, 0, 1.5]) {
+          const lx = x + Math.cos(a) * o, lz = z - Math.sin(a) * o;
+          if (lx >= x0 && lx < x0 + CH && lz >= z0 && lz < z0 + CH) addCircle(cd, lx, lz, 0.4 * size, 0.7 * size, 'wood');
+        }
       }
       // reeds around water
       if (waterNear(midX, midZ, 110)) {
@@ -871,10 +965,12 @@ export function createWorld(scene) {
     dirt: new THREE.Color(0x4a3a2a), sandLow: new THREE.Color(0x8a6c46), sandHigh: new THREE.Color(0xc4a272), sandPath: new THREE.Color(0x6e5638), ring: new THREE.Color(0x0d0f0a), clr: new THREE.Color(0x2c3a1c), mud: new THREE.Color(0x2a2219), bed: new THREE.Color(0x15120d), vill: new THREE.Color(0x3a3024),
   };
   const tc = new THREE.Color(), tc2 = new THREE.Color();
+  W.canopyCover = deepForest;
   function groundColor(x, z, h, out) {
     const n = 0.5 + 0.5 * Math.sin(x * 0.21) * Math.sin(z * 0.17) + (hash2(x * 3, z * 3) - 0.5) * 0.35;
     out.copy(C.g1).lerp(C.g2, clamp(n, 0, 1));
     const dn = denseF(x, z); if (dn > 0) out.lerp(C.dense, dn * 0.55);
+    out.multiplyScalar(1 - deepForest(x, z) * 0.28);
     const db = darkBlob(x, z); if (db > 0) out.lerp(C.dead, db * 0.55);
     const cd = clearingDist(x, z); if (cd < 0) out.lerp(C.clr, 0.6 * smoothstep(0, -6, cd));
     const vd = villageDist(x, z); if (vd < 34) out.lerp(C.vill, 0.85 * (1 - smoothstep(18, 34, vd + (hash2(x, z, 4) - 0.5) * 8)));
@@ -1067,7 +1163,7 @@ export function createWorld(scene) {
       if (!T.length) return;
       const n = T.length, mats = new Float32Array(n * 16), cols = new Float32Array(n * 3), xs = new Float32Array(n), zs = new Float32Array(n);
       T.forEach((t, i) => {
-        p4.set(t.x, hgt(t.x, t.z) + yOff, t.z); e4.set(t.tx || 0, t.ry, t.tz || 0); q4.setFromEuler(e4); s4.set(t.s, t.s, t.s);
+        p4.set(t.x, hgt(t.x, t.z) + yOff, t.z); e4.set(t.tx || 0, t.ry, t.tz || 0); q4.setFromEuler(e4); s4.set(t.radius ?? t.s, t.height ?? t.s, t.radius ?? t.s);
         m4.compose(p4, q4, s4); m4.toArray(mats, i * 16);
         const tint = t.tint || 1; cols[i * 3] = tint; cols[i * 3 + 1] = tint; cols[i * 3 + 2] = tint; xs[i] = t.x; zs[i] = t.z;
       });
@@ -1075,13 +1171,14 @@ export function createWorld(scene) {
         const m = new THREE.InstancedMesh(geo, vcMat, n);
         m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
         m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        m.boundingSphere = new THREE.Sphere(new THREE.Vector3(-HALF + cx * CH + CH / 2, 8, -HALF + cz * CH + CH / 2), 82);
+        m.boundingSphere = new THREE.Sphere(new THREE.Vector3(-HALF + cx * CH + CH / 2, 8, -HALF + cz * CH + CH / 2), nearGeo === ancientGeo ? 105 : 82);
         m.castShadow = shadow; m.receiveShadow = true; m.count = 0;
         g.add(m); return m;
       };
       lods.push({ n, mats, cols, xs, zs, near: mk(nearGeo, true), far: mk(farGeo, false) });
     };
-    makeLod(D.trees.filter((t) => t.q < frac), treeGeo, treeLowGeo, -0.2);
+    makeLod(D.trees.filter((t) => t.q < frac && !t.radius), treeGeo, treeLowGeo, -0.2);
+    makeLod(D.trees.filter((t) => t.q < frac && t.radius), ancientGeo, ancientLowGeo, -0.1);
     makeLod(D.deadTrees, deadTreeGeo, deadTreeLowGeo, -0.15);
     add(inst(bushGeo, vcMat, D.bushes, (b) => { p4.set(b.x, hgt(b.x, b.z) - 0.05, b.z); q4.setFromAxisAngle(UP, b.a); s4.set(b.s * 1.1, b.s * 0.85, b.s * 1.1); m4.compose(p4, q4, s4); c4.setScalar(b.t); b.__c = 1; return true; }));
     add(inst(dryBushGeo, vcMat, D.dryBushes, (b) => { p4.set(b.x, hgt(b.x, b.z) - 0.05, b.z); q4.setFromAxisAngle(UP, b.a); s4.set(b.s, b.s, b.s); m4.compose(p4, q4, s4); return true; }, false));
@@ -1090,7 +1187,18 @@ export function createWorld(scene) {
     add(inst(pillarGeo, vcMat, D.pillars, (p) => { p4.set(p.x, hgt(p.x, p.z) - 0.2, p.z); e4.set(p.tilt, p.a, 0); q4.setFromEuler(e4); s4.set(p.r, p.h, p.r); m4.compose(p4, q4, s4); c4.setRGB(0.66, 0.55, 0.4); p.__c = 1; return true; }));
     add(inst(ruinGeo, vcMat, D.ruins, (r) => { p4.set(r.x, hgt(r.x, r.z) - 0.3, r.z); q4.setFromAxisAngle(UP, r.a); s4.set(r.w, r.h + 0.3, r.d); m4.compose(p4, q4, s4); c4.setRGB(0.6, 0.5, 0.36); r.__c = 1; return true; }));
     add(inst(rockGeo, vcMat, D.rocks, (r) => { p4.set(r.x, hgt(r.x, r.z) + r.sy * 0.25, r.z); e4.set(...r.e); q4.setFromEuler(e4); s4.set(r.sx, r.sy, r.sz); m4.compose(p4, q4, s4); c4.setScalar(r.t); r.__c = 1; return true; }));
-    add(inst(logGeo, vcMat, D.logs, (l) => { p4.set(l.x, hgt(l.x, l.z) + 0.28, l.z); q4.setFromAxisAngle(UP, l.a); s4.set(1, 1, 1); m4.compose(p4, q4, s4); return true; }));
+    const mossyRocks = D.rocks.filter((r) => deepForest(r.x, r.z) > 0.6 && hash2(r.x, r.z, 428) < 0.7);
+    add(inst(mossGeo, vcMat, mossyRocks, (r) => {
+      p4.set(r.x - r.sx * 0.1, hgt(r.x, r.z) + r.sy * 0.96, r.z + r.sz * 0.08);
+      q4.setFromAxisAngle(UP, r.e[1]); s4.set(r.sx * 0.63, r.sy * 0.28, r.sz * 0.62);
+      m4.compose(p4, q4, s4); return true;
+    }, false));
+    const ferns = D.bushes.filter((b) => deepForest(b.x, b.z) > 0.5 && hash2(b.x, b.z, 423) < 0.38);
+    add(inst(fernGeo, vcMat, ferns, (b) => {
+      p4.set(b.x + 0.45, hgt(b.x + 0.45, b.z), b.z);
+      q4.setFromAxisAngle(UP, b.a); s4.setScalar(b.s * 0.78); m4.compose(p4, q4, s4); return true;
+    }, false));
+    add(inst(logGeo, vcMat, D.logs, (l) => { p4.set(l.x, hgt(l.x, l.z) + 0.28 * (l.size ?? 1), l.z); q4.setFromAxisAngle(UP, l.a); s4.setScalar(l.size ?? 1); m4.compose(p4, q4, s4); return true; }));
     add(inst(reedGeo, vcMat, D.reeds, (r) => { p4.set(r.x, hgt(r.x, r.z), r.z); q4.setFromAxisAngle(UP, r.a); s4.set(r.s, r.s, r.s); m4.compose(p4, q4, s4); return true; }, false));
     add(inst(decalGeo, bloodMat, D.blood, (b) => { p4.set(b.x, (b.y ?? hgt(b.x, b.z)) + 0.04, b.z); q4.setFromAxisAngle(UP, b.a); s4.set(b.s, 1, b.s); m4.compose(p4, q4, s4); return true; }, false));
     add(inst(lanternGeo, vcMat, D.lanterns, (l) => { p4.set(l.x, hgt(l.x, l.z) - 0.05, l.z); q4.setFromAxisAngle(UP, l.a); s4.set(1, 1, 1); m4.compose(p4, q4, s4); if (l.lit) c4.setRGB(1.6, 1.15, 0.55); else c4.setRGB(0.25, 0.22, 0.2); l.__c = 1; return true; }, false));
@@ -1100,6 +1208,35 @@ export function createWorld(scene) {
       sp.userData = { ph: Math.random() * 6, lantern: true, ci }; g.add(sp); W.lanternSprites.push(sp);
     }
     const swings = [];
+    const hangingLanterns = [];
+    for (const tree of D.trees) {
+      if (!tree.radius || tree.q >= frac || hash2(tree.x, tree.z, 324) > 0.19) continue;
+      const x = tree.x + Math.cos(tree.ry) * tree.radius * 2.4;
+      const z = tree.z - Math.sin(tree.ry) * tree.radius * 2.4;
+      const ground = hgt(x, z);
+      const anchor = hgt(tree.x, tree.z) + tree.height * 0.4;
+      const y = Math.min(anchor - 0.6, ground + 3 + 7 * hash2(x, z, 342));
+      if (y < ground + 3) continue;
+      const pivot = new THREE.Group();
+      pivot.position.set(x, anchor, z);
+      const chain = new THREE.Mesh(hangingChain, hangingMetal);
+      chain.scale.y = anchor - y;
+      chain.position.y = -chain.scale.y / 2;
+      const lantern = new THREE.Mesh(hangingCase, hangingMetal);
+      lantern.position.y = y - anchor;
+      pivot.add(chain, lantern);
+      if (hash2(x, z, 375) < 0.76) {
+        const glow = new THREE.Sprite(lanternGlowMat);
+        glow.scale.set(1.8, 1.8, 1);
+        glow.position.y = lantern.position.y;
+        glow.userData = { ci, ph: hash2(x, z, 395) * 6, lantern: true };
+        pivot.add(glow);
+        W.lanternSprites.push(glow);
+      }
+      pivot.userData.ph = hash2(x, z, 401) * 6;
+      g.add(pivot);
+      hangingLanterns.push(pivot);
+    }
     for (const pr of D.props) {
       if (pr.type === 'house') g.add(buildHouseMesh(pr.h));
       else if (pr.type === 'well') g.add(buildWell(pr));
@@ -1109,7 +1246,7 @@ export function createWorld(scene) {
     }
     g.traverse((o) => { if (o.isMesh && !o.isInstancedMesh && o.castShadow && !W.shadows) o.castShadow = false; });
     scene.add(g);
-    const rec = { g, swings, lods, cd: D };
+    const rec = { g, swings, hangingLanterns, lods, cd: D };
     W.loaded.set(ci, rec);
     refreshLOD(rec);
     for (const o of D.owl) { o.ci = ci; W.owlSpots.push(o); }
@@ -1155,6 +1292,7 @@ export function createWorld(scene) {
     }
   };
   W.rebuildChunks = (px, pz) => { for (const ci of [...W.loaded.keys()]) disposeChunk(ci); W.updateChunks(px, pz, true); };
+  W.invalidateChunkData = () => { cdata.fill(undefined); genList.clear(); };
   W.forEachLoaded = (cb) => { for (const [ci, rec] of W.loaded) cb(ci, rec.cd); };
   W.stats = () => ({ loaded: W.loaded.size, generated: genList.size });
 
@@ -1163,13 +1301,15 @@ export function createWorld(scene) {
     const N = 60;
     const m = new THREE.InstancedMesh(decalGeo, bloodMat, N); m.count = 0; m.frustumCulled = false; scene.add(m);
     let next = 0;
-    W.addBlood = (x, z) => {
-      p4.set(x + (Math.random() - 0.5), hgt(x, z) + 0.05, z + (Math.random() - 0.5)); q4.setFromAxisAngle(UP, Math.random() * 6.28);
-      const s = 0.8 + Math.random() * 1.2; s4.set(s, 1, s); m4.compose(p4, q4, s4);
+    const stains = [];
+    W.bloodStains = () => stains.slice();
+    W.addBlood = (x, z, angle = Math.random() * 6.28, s = 0.8 + Math.random() * 1.2) => {
+      stains[next] = { x, z, angle, s };
+      p4.set(x, hgt(x, z) + 0.05, z); q4.setFromAxisAngle(UP, angle); s4.set(s, 1, s); m4.compose(p4, q4, s4);
       m.setMatrixAt(next, m4); next = (next + 1) % N; m.count = Math.max(m.count, next === 0 ? N : next);
       m.instanceMatrix.needsUpdate = true;
     };
-    W.clearBlood = () => { m.count = 0; next = 0; };
+    W.clearBlood = () => { m.count = 0; next = 0; stains.length = 0; };
   }
 
   // grass follows the player (stateless hash, never pops oddly)
@@ -1297,7 +1437,7 @@ export function createWorld(scene) {
       const a = Math.random() * Math.PI * 2, d = minD + Math.random() * (maxD - minD);
       const x = px + Math.cos(a) * d, z = pz + Math.sin(a) * d;
       if (Math.abs(x) > HALF - 10 || Math.abs(z) > HALF - 10) continue;
-      if (W.blocked(x, z, 1.0) || W.inBuilding(x, z, 0.5) || hgt(x, z) < 0.3 || desert.blocksSpawn(x, z)) continue;
+      if (W.blocked(x, z, 1.0) || W.inBuilding(x, z, 0.5) || W.railway?.inside(x, z) || hgt(x, z) < 0.3 || desert.blocksSpawn(x, z)) continue;
       if (camYaw !== null) {
         const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw);
         if ((Math.cos(a) * fx + Math.sin(a) * fz) > 0.35 && d < 75) continue;
@@ -1326,13 +1466,16 @@ export function createWorld(scene) {
   // ------------------------------------------------------------ per-frame
   W.update = (dt, t, px, py, pz, dark = 0) => {
     W.time = t;
-    W.sky.position.set(px, 0, pz);
+    W.sky.position.set(px, py, pz);
     moon.target.position.set(px, py, pz);
     moon.position.set(px + moonDir.x * 120, py + moonDir.y * 120, pz + moonDir.z * 120);
     redMoon.target.position.set(px, py, pz); redMoon.position.set(px + redDir.x * 120, py + redDir.y * 120, pz + redDir.z * 120);
     W.updateChunks(px, pz);
     W.updateLOD(px, pz, scene.fog.far + 8);
     W.updateGrass(px, pz);
+    for (const ch of W.loaded.values()) for (const lantern of ch.hangingLanterns) {
+      lantern.rotation.z = Math.sin(t * 0.65 + lantern.userData.ph) * 0.035;
+    }
     desert.update(dt, t, px, py, pz);
     for (const ch of W.loaded.values()) for (const s of ch.swings) {
       const ph = s.userData.ph;

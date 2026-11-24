@@ -1,11 +1,14 @@
 import * as THREE from '../lib/three.module.min.js';
 import { clamp, lerp, damp, rand, pick, fmtTime } from './util.js';
-import { createWorld, CAMP, CABIN, SPAWN, VILLAGES, DESERT_PLAN } from './world.js';
+import { createWorld, CAMP, CABIN, SPAWN, VILLAGES, DESERT_PLAN, SEED, riverDist } from './world.js';
 import { GameAudio } from './audio.js';
 import { Particles } from './fx.js';
 import { Player, PCFG } from './player.js';
 import { Weapon, GUNS } from './weapon.js';
-import { Zombies } from './zombies.js';
+import { Animals, SPECIES, stats } from './animals.js';
+import { Companions } from './companions.js';
+import { Campaign } from './campaign.js';
+import { Zombies, ZCFG } from './zombies.js';
 import { Fauna } from './fauna.js';
 import { Minimap } from './minimap.js';
 import { HangingDead } from './hazards.js';
@@ -14,6 +17,9 @@ import { Mummy } from './mummy.js';
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { Dogs } from './dogs.js';
 import { SandWorms } from './worms.js';
+import { Railway } from './railway.js';
+import { Weather } from './weather.js';
+import { Suspense } from './suspense.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -50,6 +56,9 @@ audio.setVolume(settings.vol);
 const world = createWorld(scene);
 audio.setFire(world.firePos);
 const fx = new Particles(scene, 320);
+const weather = new Weather(scene, world, audio, fx);
+const suspense = new Suspense(audio, world, CAMP);
+let railway;
 const player = new Player(camera, world, audio);
 const zombies = new Zombies(scene, world, audio, fx);
 const fauna = new Fauna(scene, world, audio);
@@ -60,6 +69,15 @@ const mummy = new Mummy(scene, world, audio, fx, zombies);
 const dogs = new Dogs(scene, world, audio, fx);
 const worms = new SandWorms(scene, world, audio, fx, DESERT_PLAN.zones);
 const inventory = new Inventory(12);
+
+const animals = new Animals(scene, world, audio, npcs, DESERT_PLAN, CAMP);
+const panel = document.createElement('div');
+panel.id = 'world-panel'; panel.hidden = true; document.body.append(panel);
+const companionHud = document.createElement('div');
+companionHud.id = 'companion-hud'; companionHud.hidden = true;
+companionHud.innerHTML = '<strong></strong><progress max="1"></progress><small></small>';
+$('hud').append(companionHud);
+const companions = new Companions(animals, inventory, panel, companionHud);
 const PROGRESS = { desertBossDefeated: false, biome3Unlocked: false };   // session progression flags
 
 const flashlight = new THREE.SpotLight(0xfff1d2, 140, 50, 0.4, 0.55, 1.5);
@@ -84,6 +102,7 @@ const weapon = new Weapon({
   camera, world, zombies, fx, audio, player, muzzleLight,
   hooks: {
     dmgMul: () => 1 + 0.3 * G.infection,
+    hearing: () => weather.hearing,
     extraRay: (o, d, maxT) => extraRay(o, d, maxT),
     onHit(res, zone) {
       G.hitT = 0.16;
@@ -91,12 +110,14 @@ const weapon = new Weapon({
       audio.hitmarker();
     },
     onShot(def, o) {
+      railway.shot(o);
       worms.noise(o.x, o.z, def.loud / 4.5);
-      dogs.alert(o.x, o.z, def.loud * 0.8);
+      animals.noise(o.x, o.z, def.loud * weather.hearing);
+      dogs.alert(o.x, o.z, def.loud * 0.8 * weather.hearing);
       // sound-sensitive zombies out in the dark come for the noise
-      if (def.loud >= 60 && Math.random() < def.loud / 450 && zombies.count('ambient') < QUALITY[settings.quality].ambient + 4) {
+      if (def.loud >= 60 && Math.random() < def.loud * weather.hearing / 450 && zombies.count('ambient') < QUALITY[settings.quality].ambient + 4) {
         const sp = world.findSpot(o.x, o.z, 55, 85, player.yaw);
-        if (sp) { const e = zombies.spawn(rollType(0.2), sp.x, sp.z, 'ambient'); e.state = 'investigate'; e.tx = o.x + rand(-5, 5); e.tz = o.z + rand(-5, 5); e.invT = 20; }
+        if (sp) { const e = zombies.spawn(forestType(rollType(0.2), sp), sp.x, sp.z, 'ambient'); e.state = 'investigate'; e.tx = o.x + rand(-5, 5); e.tz = o.z + rand(-5, 5); e.invT = 20; }
       }
     },
   },
@@ -104,6 +125,7 @@ const weapon = new Weapon({
 
 zombies.onKill = (e) => {
   G.kills++;
+  if (e.railId) taken.add(e.railId);
   if (e.nestId) { clearedNests.add(e.nestId); nests.delete(e.nestId); }
   // every ordinary zombie drops one piece of infected flesh (exactly once)
   if (!e.brute && !e.dropped) { e.dropped = true; dropItem('flesh', 1, e.x + rand(-0.6, 0.6), e.z + rand(-0.6, 0.6)); }
@@ -114,6 +136,10 @@ zombies.onKill = (e) => {
   }
 };
 
+function forestType(type, p) {
+  return Math.hypot(p.x - CAMP.x, p.z - CAMP.z) > 100 && world.desertWeight(p.x, p.z) < 0.15 &&
+    world.ringWeight(p.x, p.z) < 0.25 && Math.random() < 0.7 ? 'twisted' : type;
+}
 function rollType(extraSprint = 0) {
   const w = G.wave, r = Math.random();
   const sprint = (w >= 4 ? Math.min(0.25, 0.08 + 0.03 * (w - 4)) : 0) + extraSprint + G.dark * 0.15;
@@ -200,7 +226,13 @@ function toMenu() {
   showHud(false); showScreen('menu');
   audio.resume();
 }
-$('btn-play').onclick = startGame;
+$('btn-play').onclick = () => {
+  if (campaign.hasRecord && !confirm('Start a new game? The next waystone save will replace your previous progress.')) return;
+  Object.assign(PROGRESS, { desertBossDefeated: false, biome3Unlocked: false });
+  mummy.defeated = false;
+  for (const zone of worms.zones) zone.dead = false;
+  startGame();
+};
 $('btn-resume').onclick = resumeGame;
 $('btn-restart').onclick = () => { resetGame(); G.mode = 'starting'; lockPointer(); };
 $('btn-quit').onclick = toMenu;
@@ -221,6 +253,8 @@ addEventListener('blur', () => { if (G.mode === 'playing' && !G.noLock) pauseGam
 document.addEventListener('visibilitychange', () => { if (document.hidden && G.mode === 'playing' && !G.noLock) pauseGame(); });
 
 function resetGame() {
+  railway.reset(); weather.reset(); suspense.reset();
+  campaign.reset(); animals.reset(); G.lastDamage = -Infinity;
   player.reset(); weapon.reset(); zombies.clear(); fx.clear(); fauna.clear(); world.clearBlood();
   zombies.hpMul = 1; zombies.spdMul = 1;
   Object.assign(G, { survive: 0, kills: 0, wave: 1, wavesCleared: 0, waveState: 'prep', prepT: CFG.firstPrep, toSpawn: 0, spawnT: 0,
@@ -254,6 +288,7 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'KeyG' && invUI.sel >= 0) dropFromInventory(invUI.sel, false);
     return;
   }
+  if (G.mode === 'world-panel' && e.code === 'Escape' && !campaign.busy) { closeWorldPanel(); return; }
   if (G.mode !== 'playing') return;
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat && !G.transformT) openInventory(); return; }
   if (e.code === 'Space' || e.code.startsWith('Control') || e.code === 'Tab' || e.code.startsWith('Arrow')) e.preventDefault();
@@ -268,8 +303,13 @@ addEventListener('keydown', (e) => {
       if (G.battery <= 0) { audio.flashlight(); showPromptFlash('Battery dead — press B to replace'); break; }
       G.flashOn = !G.flashOn; audio.flashlight(); break;
     case 'KeyB': replaceBattery(); break;
-    case 'KeyX': player.toggleSit(); break;
+    case 'KeyX': if (!animals.mount) player.toggleSit(); break;
     case 'KeyE': interact(); break;
+    case 'KeyJ': {
+      const a = animals.near(player);
+      if (a && !animals.mount && !G.transformT) inspectAnimal(a);
+      break;
+    }
     case 'KeyM': minimap.toggle(); break;
     case 'Digit1': weapon.switchTo(0); break;
     case 'Digit2': weapon.switchTo(1); break;
@@ -394,12 +434,23 @@ function addSupply(type, x, z, y, meta) {
 const randType = () => { const r = Math.random(); return r < 0.5 ? 'ammo' : r < 0.78 ? 'med' : 'battery'; };
 // Loot is owned by world chunks: it exists while its chunk is streamed in, and picked-up
 // items stay gone (remembered by id) until the periodic respawn puts one back.
-const taken = new Set();
+const taken = new Set(), partialLoot = new Map();
 function addChunkLoot(ci, cd) {
-  cd.loot.forEach((s, k) => { const id = ci + ':' + k; if (!taken.has(id)) addSupply(s.type, s.x, s.z, s.y, { id, ci, k, count: s.count || 1 }); });
+  railway?.loadChunk(ci);
+  const cabin = cd.props.find((p) => p.type === 'house' && p.h.cabin)?.h;
+  const grainId = ci + ':cabin-grain';
+  if (cabin && !taken.has(grainId)) {
+    addSupply('grain', cabin.x, cabin.z, cabin.y, { id: grainId, ci, count: partialLoot.get(grainId) ?? 4 });
+  }
+  cd.loot.forEach((s, k) => { const id = ci + ':' + k; if (!taken.has(id)) addSupply(s.type, s.x, s.z, s.y, { id, ci, k, count: partialLoot.get(id) ?? s.count ?? 1 }); });
+  if (ci % 3 === 0 && cd.loot[0]) {
+    const s = cd.loot[0], id = ci + ':grain';
+    if (!taken.has(id)) addSupply('grain', s.x + 1, s.z, s.y, { id, ci, count: partialLoot.get(id) ?? 4 });
+  }
 }
 world.onChunkLoad = (ci, cd) => { addChunkLoot(ci, cd); minimap.reveal(ci); hanging.onChunkLoad(ci, cd); registerChunkNests(ci, cd); };
 world.onChunkUnload = (ci) => {
+  railway?.unloadChunk(ci);
   hanging.onChunkUnload(ci); unregisterNests(ci);
   for (let i = supplies.length - 1; i >= 0; i--) if (supplies[i].ci === ci) { scene.remove(supplies[i].mesh); supplies.splice(i, 1); }
 };
@@ -412,7 +463,9 @@ function spawnSupplyRespawn() {
   const r = Math.random();
   if (taken.size && r < 0.5) { // put a looted chunk item back
     const id = pick([...taken]); taken.delete(id);
-    const [ci, k] = id.split(':').map(Number), rec = world.loaded.get(ci), sp = rec && rec.cd.loot[k];
+    const [ci, k] = id.split(':').map(Number);
+    if (!Number.isInteger(ci) || !Number.isInteger(k)) { taken.add(id); return; }
+    const rec = world.loaded.get(ci), sp = rec && rec.cd.loot[k];
     if (isNaN(ci) || (sp && !['ammo', 'med', 'battery', 'canned', 'water'].includes(sp.type))) { taken.add(id); return; } // rare loot never respawns
     if (sp && Math.hypot(sp.x - player.pos.x, sp.z - player.pos.z) > 25) addSupply(sp.type, sp.x, sp.z, sp.y, { id, ci, k });
     else if (sp) taken.add(id);
@@ -426,16 +479,49 @@ function spawnSupplyRespawn() {
   const sp = world.findSpot(player.pos.x, player.pos.z, 25, 85, player.yaw);
   if (sp) addSupply(randType(), sp.x, sp.z);
 }
+function openWorldPanel() {
+  G.mode = 'world-panel'; G.mouseDown = G.adsHeld = false;
+  for (const key in keys) keys[key] = false;
+  panel.hidden = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function closeWorldPanel() {
+  panel.hidden = true;
+  G.mode = 'paused'; showScreen('pause'); lockPointer();
+}
+function mountAnimal(animal) {
+  if (animals.ride(animal, player)) return true;
+  toast('There is no room to mount here');
+  return false;
+}
+function inspectAnimal(animal) {
+  openWorldPanel();
+  companions.show(animal, closeWorldPanel, (a) => {
+    mountAnimal(a);
+    closeWorldPanel();
+  });
+}
 let nearSupply = null;
 function interact() {
-  if (!nearSupply) return;
+  if (G.transformT) return;
+  if (animals.mount) { animals.dismount(player); return; }
+  if (!nearSupply) {
+    const coach = railway.doorNear(player.pos);
+    if (coach) { railway.wake(coach); return; }
+    const stone = campaign.stones.near(player);
+    if (stone) { campaign.interact(stone); return; }
+    const a = animals.near(player);
+    if (a && a === animals.companion) mountAnimal(a);
+    else if (a) inspectAnimal(a);
+    return;
+  }
   const s = nearSupply, n = s.count || 1;
   const left = inventory.add(s.type, n);
   if (left === n) { toast('Inventory full'); audio.empty(); return; }
   audio.pickup();
   toast(`+${n - left} ${ITEMS[s.type].name}`);
-  if (left > 0) { s.count = left; return; }
-  if (s.id) taken.add(s.id);
+  if (left > 0) { s.count = left; if (s.id) partialLoot.set(s.id, left); return; }
+  if (s.id) { taken.add(s.id); partialLoot.delete(s.id); }
   scene.remove(s.mesh);
   supplies.splice(supplies.indexOf(s), 1);
   nearSupply = null;
@@ -466,7 +552,7 @@ function spawnOne() {
   const sp = world.findSpot(player.pos.x, player.pos.z, 45, 78, player.yaw);
   if (!sp) return false;
   if (world.desertWeight(sp.x, sp.z) > 0.5) { const e = zombies.spawnBuried(rollType(), sp.x, sp.z, 'wave', 999); zombies.emerge(e); }
-  else zombies.spawn(rollType(), sp.x, sp.z, 'wave');
+  else zombies.spawn(forestType(rollType(), sp), sp.x, sp.z, 'wave');
   return true;
 }
 function updateWaves(dt) {
@@ -516,19 +602,8 @@ function updateAmbient(dt) {
   const want = Math.min(QUALITY[settings.quality].ambient, Math.round(1 + G.dark * 6 + Math.min(1, Math.hypot(px - SPAWN.x, pz - SPAWN.z) / 200) * 2));
   if (zombies.count('ambient') < want) {
     const sp = world.findSpot(px, pz, 60, 120, player.yaw);
-    if (sp && G.indoor < 0.5) { const e = zombies.spawn(rollType(G.dark * 0.15), sp.x, sp.z, 'ambient', world.desertWeight(sp.x, sp.z) > 0.5); e.state = 'wander'; zombies.pickWander(e); }
+    if (sp && G.indoor < 0.5) { const e = zombies.spawn(forestType(rollType(G.dark * 0.15), sp), sp.x, sp.z, 'ambient', world.desertWeight(sp.x, sp.z) > 0.5); e.state = 'wander'; zombies.pickWander(e); }
   }
-}
-function updateSuspense(dt) {
-  G.eventT -= dt * (1 + G.dark * 1.8);
-  if (G.eventT > 0) return;
-  G.eventT = rand(18, 40);
-  const p = player.pos, r = Math.random();
-  const behind = (dist) => ({ x: p.x + Math.sin(player.yaw) * dist + rand(-3, 3), y: p.y + 0.3, z: p.z + Math.cos(player.yaw) * dist + rand(-3, 3) });
-  if (r < 0.4) audio.twig(behind(rand(7, 13)));
-  else if (r < 0.65) { const a = Math.random() * 6.28; audio.scream({ x: p.x + Math.cos(a) * 120, y: p.y + 5, z: p.z + Math.sin(a) * 120 }); }
-  else if (r < 0.85) { const q = behind(rand(15, 25)); audio.growl(q, { pitch: 0.7, dur: 1.6, gain: 0.5 }); }
-  else { audio.twig(behind(9)); setTimeout(() => audio.twig(behind(7)), 450); }
 }
 const DARKC = new THREE.Color(0x020306);
 const ATM = {};
@@ -546,24 +621,38 @@ function initDesertSky() {
   bigStars = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.15, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0, fog: false, depthWrite: false }));
   world.sky.add(bigStars);
   // sand drifting on the wind
-  const m = 260, sp = new Float32Array(m * 3);
+  const m = 860, sp = new Float32Array(m * 3);
   const g2 = new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(sp, 3));
   sandFx = new THREE.Points(g2, new THREE.PointsMaterial({ color: 0xd8c098, size: 0.05, transparent: true, opacity: 0, depthWrite: false }));
   sandFx.frustumCulled = false; sandFx.userData.n = m; sandFx.userData.init = false; scene.add(sandFx);
 }
 function updateSand(dt, k) {
-  sandFx.material.opacity = k * 0.75;
+  const storm = weather.sand;
+  sandFx.material.opacity = Math.min(0.9, k * 0.6 + storm * 0.4);
+  sandFx.material.size = 0.05 + storm * 0.13;
   sandFx.visible = k > 0.03;
   if (!sandFx.visible) return;
-  const a = sandFx.geometry.attributes.position, p = player.pos, n = sandFx.userData.n;
+  const a = sandFx.geometry.attributes.position, p = player.pos;
+  const limit = settings.quality === 'low' ? 410 : settings.quality === 'medium' ? 620 : sandFx.userData.n;
+  const n = Math.round(210 + (limit - 210) * storm);
+  const terrainSlice = (sandFx.userData.terrainSlice = ((sandFx.userData.terrainSlice ?? 0) + 1) % 4);
+  sandFx.geometry.setDrawRange(0, n);
   for (let i = 0; i < n; i++) {
     let x = a.array[i * 3], y = a.array[i * 3 + 1], z = a.array[i * 3 + 2];
-    if (!sandFx.userData.init || Math.abs(x - p.x) > 22 || Math.abs(z - p.z) > 22) { x = p.x + rand(-22, 22); z = p.z + rand(-22, 22); y = world.hgt(x, z) + rand(0, 2.5); }
-    x += (5 + Math.sin(i) * 1.5) * dt; z += (1.5 + Math.cos(i * 1.3)) * dt; y += Math.sin(G.T * 2 + i) * 0.3 * dt;
-    const gy = world.hgt(x, z); if (y < gy + 0.05) y = gy + 0.05;
+    if (!sandFx.userData.init || i >= (sandFx.userData.lastCount || 0) || Math.abs(x - p.x) > 22 || Math.abs(z - p.z) > 22) {
+      x = p.x + rand(-22, 22); z = p.z + rand(-22, 22); y = world.hgt(x, z) + rand(0, 2.5 + 3 * storm);
+    }
+    x += (5 + storm * 17 + Math.sin(i) * 1.5) * dt; z += (1.5 - storm * 5 + Math.cos(i * 1.3)) * dt;
+    y += Math.sin(G.T * 2 + i) * (0.3 + storm) * dt;
+    if (i % 4 === terrainSlice) {
+      const gy = world.hgt(x, z);
+      if (y < gy + 0.05) y = gy + 0.05;
+      else if (y > gy + 3.2 + storm * 3.5) y = gy + 2.8;
+    }
     a.array[i * 3] = x; a.array[i * 3 + 1] = y; a.array[i * 3 + 2] = z;
   }
   sandFx.userData.init = true;
+  sandFx.userData.lastCount = n;
   a.needsUpdate = true;
 }
 function updateAtmosphere(dt) {
@@ -577,7 +666,7 @@ function updateAtmosphere(dt) {
   G.dark = damp(G.dark, target, 0.7, dt);
   const k = G.dark;
   world.hemi.intensity = A.hemi * lerp(1, 0.045, k);
-  world.moon.intensity = A.moon * lerp(1, 0.02, k);
+  world.moon.intensity = A.moon * lerp(1, 0.02, k) * (1 - 0.38 * world.canopyCover(player.pos.x, player.pos.z));
   const far = Math.min(330, q.fog * A.fogFarMul);
   scene.fog.far = lerp(far, 22, k);
   scene.fog.near = lerp(A.fogNear, 0.5, k);
@@ -586,16 +675,26 @@ function updateAtmosphere(dt) {
   world.domeMat.color.setScalar((1 - 0.92 * k) * (1 - G.indoor));
   world.starMat.opacity = A.stars * (1 - k) * (1 - G.indoor);
   bigStars.material.opacity = A.bigStars * (1 - k) * (1 - G.indoor);
-  world.moonMat.opacity = (1 - 0.9 * k) * (1 - G.indoor);
+  world.moonMat.opacity = (1 - k) * (1 - G.indoor);
   world.redMoonMat.opacity = world.moonMat.opacity;
   world.redMoon.intensity = 0.4 * (A.moon / 2) * (1 - k) * (1 - G.indoor);
   world.sky.children[2].scale.set(70 * A.moonScale, 70 * A.moonScale, 1);
   renderer.toneMappingExposure = A.exposure;
+  weather.applyAtmosphere(scene, world, bigStars.material);
+  if (railway.shelter(px, pz)) {
+    world.hemi.intensity *= 0.53;
+    world.moon.intensity *= 0.22;
+    world.redMoon.intensity *= 0.28;
+  }
+  world.setRainTint(weather.rain);
   world.viewDist = clamp(Math.round(scene.fog.far / 20) * 20, 40, 330);
   zombies.farDist = Math.max(40, scene.fog.far);
-  world.mistCount = Math.min(30, Math.round(q.mist * A.mist));
-  audio.setDark(k); audio.setWind(A.wind);
-  updateSand(dt, A.sand * (1 - G.indoor));
+  world.mistCount = Math.min(30, Math.round(q.mist * A.mist * (1 + weather.rain * 0.55)));
+  const desert = A.weights.desert;
+  const river = clamp((32 - riverDist(px, pz)) / 23, 0, 1) * (1 - desert) * (G.weatherShelter ? 0.18 : 1);
+  audio.setDark(k);
+  audio.setOutdoorAmbience(A.wind * (G.weatherShelter ? 0.23 : 1), river, desert * (G.weatherShelter ? 0 : 1));
+  updateSand(dt, G.weatherShelter ? 0 : Math.max(A.sand, weather.sand));
   // announce biome changes
   const b = world.dominantBiome(px, pz);
   if (b.id !== G.biome) {
@@ -609,7 +708,9 @@ function updateAtmosphere(dt) {
 // ------------------------------------------------------------------ player damage / death
 function damagePlayer(dmg, kind = 'zombie') {
   if (G.mode !== 'playing' || G.transformT) return;
-  G.cause = { worm: 'Devoured by a sand worm', dog: 'Mauled by infected dogs', acid: 'Dissolved by acid', mummy: 'Torn apart by the Ancient Mummy', slam: 'Crushed by the Ancient Mummy', grab: 'Strangled by bandages', bandage: 'Lashed by the Ancient Mummy', cultist: 'Sacrificed by cultists' }[kind] || 'Killed by the dead';
+  G.cause = { worm: 'Devoured by a sand worm', dog: 'Mauled by infected dogs', acid: 'Dissolved by acid', mummy: 'Torn apart by the Ancient Mummy', slam: 'Crushed by the Ancient Mummy', grab: 'Strangled by bandages', bandage: 'Lashed by the Ancient Mummy', cultist: 'Sacrificed by cultists', cultistMagic: 'Struck down by cultist magic' }[kind] || 'Killed by the dead';
+  G.lastDamage = G.survive;
+  if (animals.mount && ['worm', 'dog', 'acid'].includes(kind)) damageCompanion(dmg * 0.75);
   if (kind === 'acid') G.acidFlash = 1;
   player.health -= dmg;
   G.dmgFlash = Math.min(1.4, dmg / 14);
@@ -670,9 +771,17 @@ function updateHud(dt) {
   $('scope').classList.toggle('on', !!weapon.scoped);
   setText('prepbar', G.waveState === 'prep' ? `WAVE ${G.wave} BEGINS IN ${Math.max(0, Math.ceil(G.prepT))}` : '');
   let p = '';
-  if (nearSupply) {
+  const animal = animals.near(player), stone = campaign.stones.near(player);
+  const railDoor = railway.doorNear(player.pos);
+  companions.update();
+  if (animals.mount) p = '<kbd>E</kbd> Dismount';
+  else if (nearSupply) {
     p = `<kbd>E</kbd> Pick up ${ITEMS[nearSupply.type].name}${nearSupply.count > 1 ? ' x' + nearSupply.count : ''}`;
-  } else if (promptFlashT > 0) p = promptFlash;
+    if (animal) p += ' · <kbd>J</kbd> Inspect animal';
+  } else if (railDoor) p = '<kbd>E</kbd> Rattle the coach door';
+  else if (stone) p = campaign.stones.active.has(stone.id) ? '<kbd>E</kbd> Use Waystone' : '<kbd>E</kbd> Awaken Waystone';
+  else if (animal) p = animal === animals.companion ? '<kbd>E</kbd> Mount · <kbd>J</kbd> Manage companion' : '<kbd>E</kbd> Inspect animal';
+  else if (promptFlashT > 0) p = promptFlash;
   else if (G.battery <= 0 && inventory.count('battery') > 0) p = '<kbd>B</kbd> Replace dead battery';
   else if (G.grabbed) p = 'GRABBED!';
   promptFlashT -= dt;
@@ -707,7 +816,7 @@ function dropItem(type, n, x, z, y) {
 }
 function extraRay(o, d, maxT) {
   let best = null, src = null;
-  for (const s of [hanging, npcs, mummy, dogs, worms]) { const h = s.rayHit(o, d, best ? best.t : maxT); if (h && h.t < (best ? best.t : maxT)) { best = h; src = s; } }
+  for (const s of [hanging, npcs, mummy, dogs, worms, animals]) { const h = s.rayHit(o, d, best ? best.t : maxT); if (h && h.t < (best ? best.t : maxT)) { best = h; src = s; } }
   if (!best) return null;
   best.color = src === hanging || src === dogs ? 0x3a5a10 : src === mummy || src === worms ? 0xc8b890 : 0x7a0c0c;
   const apply = best.apply;
@@ -762,7 +871,7 @@ function updateNests(dt) {
 // desert structures stream their loot / nests / NPCs / boss in and out
 function onStructLoad(st) {
   const D = world.desert;
-  const add = (list, toW) => list.forEach((l, k) => { const id = 's:' + st.id + ':' + k; if (taken.has(id)) return; const [x, z, y] = toW(l); addSupply(l.type, x, z, y, { id, sid: st.id, count: l.count || 1 }); });
+  const add = (list, toW) => list.forEach((l, k) => { const id = 's:' + st.id + ':' + k; if (taken.has(id)) return; const [x, z, y] = toW(l); addSupply(l.type, x, z, y, { id, sid: st.id, count: partialLoot.get(id) ?? l.count ?? 1 }); });
   if (st.kind === 'great') {
     add(st.loot, (l) => [st.x + l.lx, st.z + l.lz, st.F]);
     st.nests.forEach((n, k) => regNest('s:' + st.id + ':n' + k, st.x + n.lx, st.z + n.lz, st.id));
@@ -772,6 +881,8 @@ function onStructLoad(st) {
     st.nests.forEach((n, k) => { const [x, z] = D.worldPos(st, n.lx, n.lz); regNest('s:' + st.id + ':n' + k, x, z, st.id); });
   } else if (st.kind === 'camp') {
     add(st.loot, (l) => [l.wx, l.wz, world.hgt(l.wx, l.wz)]);
+    const feed = st.loot[0], id = 's:' + st.id + ':grain';
+    if (feed && !taken.has(id)) addSupply('grain', feed.wx + 1, feed.wz, undefined, { id, sid: st.id, count: partialLoot.get(id) ?? 5 });
     npcs.loadCamp(st);
   }
 }
@@ -908,19 +1019,43 @@ const clock = new THREE.Clock();
 const zctx = { px: 0, pz: 0, playerAlive: true, detectMul: 1, onHit: damagePlayer };
 const menuTarget = new THREE.Vector3(CAMP.x, world.hgt(CAMP.x, CAMP.z) + 1.4, CAMP.z);
 
+function damageCompanion(amount) {
+  G.lastDamage = G.survive;
+  animals.damage(animals.companion, amount);
+}
 function updateZombies(dt, alive) {
-  zctx.px = player.pos.x; zctx.pz = player.pos.z; zctx.playerAlive = alive;
-  zctx.detectMul = (player.sitting ? 0.45 : player.crouching ? 0.6 : 1) * (player.sprinting ? 1.5 : 1) * (G.flashOn ? 1.15 : 0.9);
+  zctx.companion = animals.companion;
+  zctx.onAnimalHit = damageCompanion;
+  zctx.px = player.pos.x; zctx.pz = player.pos.z; zctx.playerAlive = alive; zctx.playerYaw = player.yaw;
+  zctx.detectMul = (player.sitting ? 0.45 : player.crouching ? 0.6 : 1) * (player.sprinting ? 1.5 : 1) * (G.flashOn ? 1.15 : 0.9) * weather.visibility;
   zombies.update(dt, zctx, G.T);
 }
 
 function updatePlaying(dt) {
   G.survive += dt;
+  const p = player.pos;
+  const coach = railway.inside(p.x, p.z);
+  G.weatherShelter = !!(coach || world.inBuilding(p.x, p.z) || world.desert.insideOf(p.x, p.z));
+  weather.update(dt, G.T, player, camera, G.weatherShelter, !!coach,
+    settings.quality === 'low' ? 0 : settings.quality === 'high' ? 2 : 1, G.flashOn && G.battery > 0);
+  railway.update(p.x, p.z, G.T);
   const aiming = G.adsHeld && !weapon.reloading;
   const inf = G.infection;
+  if (animals.fell) {
+    animals.fell = false; player.vy = 2; player.onGround = false; G.shake = 1;
+    player.pos.x += Math.cos(player.yaw) * 1.3; player.pos.z -= Math.sin(player.yaw) * 1.3;
+    world.resolve(player.pos, PCFG.radius);
+  }
+  const mount = animals.mount;
   player.update(dt, keys, {
+    mount: mount ? { ...SPECIES[mount.species], bonus: stats(mount).speed } : null,
     canMove: !G.grabbed && !G.transformT, aiming, firing: G.mouseDown,
-    speedMul: 1 + 0.3 * inf, drainMul: 1 + 0.35 * inf, passiveDrain: INF.drain[inf] || 0, regenMul: INF.regen[inf] ?? 1,
+    speedMul: 1 + 0.3 * inf, weatherSpeed: weather.movement,
+    onStep: (sprinting) => {
+      if (sprinting) zombies.alert(player.pos.x, player.pos.z, 8 * weather.hearing, false);
+      if (coach) audio.railStep(player.pos);
+    },
+    drainMul: 1 + 0.35 * inf, passiveDrain: INF.drain[inf] || 0, regenMul: INF.regen[inf] ?? 1,
   });
   if (G.grabbed && mummy.m) { // a bandage is wrapped round the player: dragged toward the mummy
     const m = mummy.m, dx = m.x - player.pos.x, dz = m.z - player.pos.z, d = Math.hypot(dx, dz);
@@ -936,6 +1071,7 @@ function updatePlaying(dt) {
     swP = (Math.sin(G.T * 0.9) + Math.sin(G.T * 2.3) * 0.3) * amp;
     swY = Math.cos(G.T * 0.7) * amp * 1.2;
   }
+  swY += Math.sin(G.T * 5.2) * weather.sand * 0.006;
   player.applyCamera(dt, weapon.recoil + swP, swY);
   if (G.shake > 0.01) {
     camera.position.x += (Math.random() - 0.5) * 0.25 * G.shake; camera.position.y += (Math.random() - 0.5) * 0.2 * G.shake; camera.position.z += (Math.random() - 0.5) * 0.25 * G.shake;
@@ -945,11 +1081,13 @@ function updatePlaying(dt) {
   camera.fov = lerp(72, weapon.gun.def.adsFov, weapon.ads);
   camera.updateProjectionMatrix();
   updateFlashlight(dt);
-  weapon.update(dt, { firing: G.mouseDown, adsHeld: G.adsHeld, sprinting: player.sprinting, canAct: !G.transformT, lookDX: G.lookDX, lookDY: G.lookDY, time: G.T });
+  weapon.update(dt, { firing: G.mouseDown, adsHeld: G.adsHeld, sprinting: player.sprinting, canAct: !G.transformT, lookDX: G.lookDX + Math.sin(G.T * 7) * weather.sand * 1.4, lookDY: G.lookDY, time: G.T });
   G.lookDX = G.lookDY = 0;
   updateAtmosphere(dt);
   world.update(dt, G.T, player.pos.x, player.pos.y, player.pos.z, G.dark);
   fauna.update(dt, G.T, player.pos.x, player.pos.y, player.pos.z, G.dark);
+  animals.update(dt, G.T, player, zombies.list);
+  campaign.stones.update(dt, G.T, player);
   updateZombies(dt, true);
   updateWaves(dt);
   updateVillages();
@@ -958,8 +1096,12 @@ function updatePlaying(dt) {
   npcs.update(dt, G.T, player, true);
   mummy.update(dt, G.T, player, true);
   dogs.farDist = Math.max(60, scene.fog.far + 10);
+  dogs.detectMul = weather.visibility;
   dogs.update(dt, G.T, player, true);
   worms.update(dt, G.T, player, true);
+  const threats = zombies.list.some((e) => !e.dead && e.dist < 35 && ['chase', 'attack'].includes(e.state));
+  suspense.update(dt, player, weather, railway.near(p.x, p.z, 43), G.weatherShelter,
+    G.mouseDown || G.survive - G.lastDamage < 5 || mummy.active || threats, threats);
   updateDesertLife(dt);
   updateNests(dt);
   updateInfection(dt);
@@ -973,7 +1115,10 @@ function updatePlaying(dt) {
     if (!s.mesh.visible) continue;
     s.mesh.rotation.y += dt * 0.8;
     s.mesh.position.y = s.base + Math.sin(G.T * 2 + s.ph) * 0.03;
-    if (d < best && Math.abs(s.base - player.pos.y) < 2.2) { best = d; nearSupply = s; }
+    if (d < best && Math.abs(s.base - player.pos.y) < 2.2 &&
+        (!s.sid?.startsWith('rail-coach-') || railway.inside(player.pos.x, player.pos.z)?.id === s.sid)) {
+      best = d; nearSupply = s;
+    }
   }
   G.supplyT -= dt;
   if (G.supplyT <= 0) { G.supplyT = CFG.supplyEvery; spawnSupplyRespawn(); }
@@ -1007,6 +1152,8 @@ function updateDead(dt) {
 }
 
 function updateMenu(dt) {
+  audio.setWeather(0, 0, false, false);
+  audio.setOutdoorAmbience(1, 0, 0);
   const a = G.T * 0.07 + 1.2, r = 11;
   camera.position.set(CAMP.x + Math.cos(a) * r, world.hgt(CAMP.x, CAMP.z) + 2.6 + Math.sin(G.T * 0.2) * 0.3, CAMP.z + Math.sin(a) * r);
   camera.lookAt(menuTarget);
@@ -1045,14 +1192,36 @@ function confirmFatal(i) { $('inv-confirm').dataset.i = i; $('inv-confirm').clas
 
 // ------------------------------------------------------------------ boot
 syncSettingsUI();
-applyQuality(settings.quality);
 resize();
 weapon.group.visible = false;
+const campaign = new Campaign({
+  G, scene, world, player, animals, species: SPECIES, inventory, items: ITEMS, weapon, zombies, zombieTypes: ZCFG.types,
+  mummy, worms, dogs, hanging, npcs, fx, audio, progress: PROGRESS, taken, partialLoot, clearedNests,
+  supplies, minimap, villages: vstate, panel, camp: CAMP, plan: DESERT_PLAN, seed: SEED,
+  openWorldPanel, closeWorldPanel, addSupply, onStructLoad, resetGame, toast,
+});
+railway = new Railway(world, scene, zombies, audio, taken, (coach, rewards) => {
+  if (!rewards) {
+    for (let i = supplies.length - 1; i >= 0; i--) if (supplies[i].sid === coach.id) {
+      scene.remove(supplies[i].mesh); supplies.splice(i, 1);
+    }
+    return;
+  }
+  rewards.forEach(([type, x, z, count], i) => {
+    const id = 'rail:loot:' + coach.id + ':' + i;
+    if (!taken.has(id)) addSupply(type, coach.x + x, coach.z + z, coach.y + 0.02,
+      { id, sid: coach.id, count: partialLoot.get(id) ?? count });
+  });
+}, campaign.stones.nodes);
+world.invalidateChunkData();
+applyQuality(settings.quality);
+$('btn-continue').onclick = () => campaign.continue();
+campaign.refresh();
 resetGame();
 showScreen('menu'); showHud(false);
 frame();
 
-window.__dw = { dogs, worms, hanging, npcs, mummy, inventory, invUI, PROGRESS, nests, eatFlesh, useType, openInventory, closeInventory, dropItem, G, player, weapon, zombies, world, camera, scene, supplies, keys, startGame, damagePlayer, startWave, renderer, pauseGame, resumeGame, toMenu, fauna, minimap, vstate, QUALITY };
+window.__dw = { railway, weather, suspense, campaign, animals, companions, dogs, worms, hanging, npcs, mummy, inventory, invUI, PROGRESS, nests, eatFlesh, useType, openInventory, closeInventory, dropItem, G, player, weapon, zombies, world, camera, scene, supplies, keys, startGame, damagePlayer, startWave, renderer, pauseGame, resumeGame, toMenu, fauna, minimap, vstate, QUALITY };
 if (DEBUG) {
   G.noLock = true;
   if (params.has('autostart')) startGame();

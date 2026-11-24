@@ -14,6 +14,17 @@ const matCache = new Map();
 const mat = (c) => matCache.get(c) || matCache.set(c, new THREE.MeshLambertMaterial({ color: c, flatShading: true })).get(c);
 const faceMat = new THREE.MeshBasicMaterial({ color: 0x050403 });
 const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff6a20, fog: false });
+export const CULT_MAGIC = {
+  minRange: 5, maxRange: 28, windup: 0.65, speed: 14, damage: 12,
+  cooldownMin: 4, cooldownMax: 6, campInterval: 0.9, lifetime: 2.8,
+};
+const spellColor = 0xb661ff;
+const boltCore = new THREE.IcosahedronGeometry(0.14, 1);
+const boltHalo = new THREE.IcosahedronGeometry(0.27, 1);
+const boltCoreMat = new THREE.MeshBasicMaterial({ color: 0xe9bfff });
+const boltHaloMat = new THREE.MeshBasicMaterial({
+  color: spellColor, transparent: true, opacity: 0.46, blending: THREE.AdditiveBlending, depthWrite: false,
+});
 
 const G = {
   robe: new THREE.CylinderGeometry(0.24, 0.56, 1.0, 8).translate(0, 0.5, 0),
@@ -65,7 +76,7 @@ const lowCamel = mergeGeos([
   { geo: new THREE.BoxGeometry(0.25, 1.2, 0.25).translate(0, 2.2, 1.1), color: 0x9a7a50 }, { geo: new THREE.BoxGeometry(0.3, 0.3, 0.6).translate(0, 2.8, 1.35), color: 0x9a7a50 },
   ...[[-0.3, -0.7], [0.3, -0.7], [-0.3, 0.7], [0.3, 0.7]].map(([x, z]) => ({ geo: new THREE.BoxGeometry(0.15, 1.5, 0.15).translate(x, 0.75, z), color: 0x8a6a44 })),
 ]);
-function buildCamel() {
+export function buildCamel() {
   const root = new THREE.Group(), detail = new THREE.Group(); root.add(detail);
   const body = new THREE.Group(); body.position.y = 1.75; detail.add(body);
   const b = new THREE.Mesh(CG.body, camelMat); b.castShadow = true; body.add(b);
@@ -96,12 +107,15 @@ export class NPCs {
     this.onPlayerHit = null;
     this.frame = 0;
     this.out = { x: 0, z: 0 };
+    this.spells = [];
+    this.spellTarget = new THREE.Vector3();
+    this.spellDirection = new THREE.Vector3();
   }
   clear() { for (const id of [...this.camps.keys()]) this.unloadCamp(id); this.killed.clear(); this.hostile.clear(); }
 
   loadCamp(cp) {
     if (this.camps.has(cp.id)) return;
-    const rec = { cp, cultists: [], camels: [], t: 0 };
+    const rec = { cp, cultists: [], t: 0 };
     cp.seats.forEach((s, k) => {
       const id = cp.id + ':c' + k; if (this.killed.has(id)) return;
       const P = buildCultist(); this.scene.add(P.root);
@@ -111,18 +125,64 @@ export class NPCs {
       const id = cp.id + ':cw';
       if (!this.killed.has(id)) { const P = buildCultist(); this.scene.add(P.root); rec.cultists.push({ id, P, x: cp.x + 10, z: cp.z, yaw: 0, hp: 60, dead: false, deadT: 0, phase: 0, watch: 0, headYaw: 0, attackT: 0, pose: {}, walker: true, ang: Math.random() * 6.28 }); }
     }
-    for (let k = 0; k < 2; k++) {
-      const id = cp.id + ':m' + k; if (this.killed.has(id)) continue;
-      const P = buildCamel(); this.scene.add(P.root);
-      const a = Math.random() * 6.28;
-      rec.camels.push({ id, P, x: cp.x + Math.cos(a) * 16, z: cp.z + Math.sin(a) * 16, yaw: Math.random() * 6.28, hp: 80, dead: false, deadT: 0, state: 'idle', t: rand(2, 6), tx: 0, tz: 0, sit: 0, ph: Math.random() * 6, speed: 0, groanT: rand(5, 20) });
-    }
+
     this.camps.set(cp.id, rec);
   }
   unloadCamp(id) {
     const rec = this.camps.get(id); if (!rec) return;
-    for (const c of [...rec.cultists, ...rec.camels]) this.scene.remove(c.P.root);
+    for (const c of rec.cultists) this.scene.remove(c.P.root);
+    this.clearSpells(id);
     this.camps.delete(id);
+  }
+
+  clearSpells(campId) {
+    for (let i = this.spells.length - 1; i >= 0; i--) {
+      const spell = this.spells[i];
+      if (campId === undefined || spell.campId === campId) {
+        this.scene.remove(spell.mesh); this.spells.splice(i, 1);
+      }
+    }
+    for (const [id, rec] of this.camps) if (campId === undefined || id === campId) {
+      for (const cultist of rec.cultists) cultist.spellAt = undefined;
+    }
+  }
+
+  throwSpell(c, campId) {
+    const mesh = new THREE.Mesh(boltCore, boltCoreMat);
+    mesh.add(new THREE.Mesh(boltHalo, boltHaloMat));
+    mesh.position.set(c.x, this.world.hgt(c.x, c.z) + 1.35, c.z);
+    const dir = new THREE.Vector3().subVectors(c.spellAim, mesh.position).normalize();
+    this.scene.add(mesh);
+    this.spells.push({ mesh, dir, campId, life: CULT_MAGIC.lifetime, trail: 0 });
+    this.audio.cultistMagic(mesh.position, 'throw');
+  }
+
+  updateSpells(dt, player, alive) {
+    const p = player.pos;
+    const foot = _b.set(p.x, p.y + 0.26, p.z);
+    const head = _c.set(p.x, p.y + Math.max(0.27, player.eyeH), p.z);
+    for (let i = this.spells.length - 1; i >= 0; i--) {
+      const spell = this.spells[i], { mesh, dir } = spell;
+      const maxStep = CULT_MAGIC.speed * Math.min(dt, spell.life);
+      const at = mesh.position;
+      const solid = this.world.rayHit(at.x, at.y, at.z, dir.x, dir.y, dir.z, maxStep);
+      const playerHit = alive ? rayCapsuleT(at, dir, foot, head, 0.39) : -1;
+      const hitPlayer = playerHit >= 0 && playerHit <= maxStep && playerHit < solid;
+      const hitWorld = solid <= maxStep;
+      at.addScaledVector(dir, hitPlayer ? playerHit : Math.min(solid, maxStep));
+      spell.life -= dt; spell.trail -= dt;
+      if (hitPlayer || hitWorld || spell.life <= 0) {
+        this.scene.remove(mesh); this.spells.splice(i, 1);
+        if (hitPlayer || hitWorld) {
+          this.fx.emit(at, 13, spellColor, 3, 0.45, null, 1.5);
+          this.audio.cultistMagic(at, 'impact');
+        }
+        if (hitPlayer) this.onPlayerHit?.(CULT_MAGIC.damage, 'cultistMagic');
+      } else if (spell.trail <= 0) {
+        spell.trail = 0.045;
+        this.fx.emit(at, 2, spellColor, 0.6, 0.27, null, 0.4);
+      }
+    }
   }
 
   rayHit(o, d, maxT) {
@@ -138,13 +198,7 @@ export class NPCs {
         if (tb >= 0 && (t < 0 || tb < t - 0.05)) { t = tb; zone = 'body'; }
         if (t >= 0 && t < maxT && (!best || t < best.t)) best = { t, zone, who: c, rec, kind: 'cultist' };
       }
-      for (const m of rec.camels) {
-        if (m.dead || !m.P.detail.visible) continue;
-        const cx = m.x - o.x, cz = m.z - o.z; if (cx * d.x + cz * d.z < -3 || Math.hypot(cx, cz) > maxT + 3) continue;
-        m.P.body.localToWorld(_b.set(0, 0, -1)); m.P.body.localToWorld(_c.set(0, 0.2, 1.1));
-        const t = rayCapsuleT(o, d, _b, _c, 0.7);
-        if (t >= 0 && t < maxT && (!best || t < best.t)) best = { t, zone: 'body', who: m, rec, kind: 'camel' };
-      }
+
     }
     if (!best) return null;
     return { t: best.t, zone: best.zone, apply: (dmg) => this.damage(best.rec, best.who, best.kind, best.zone === 'head' && best.kind === 'cultist' ? 1e6 : dmg) };
@@ -170,6 +224,7 @@ export class NPCs {
 
   update(dt, t, player, alive) {
     this.frame++;
+    this.updateSpells(dt, player, alive);
     const px = player.pos.x, pz = player.pos.z;
     for (const rec of this.camps.values()) {
       const cp = rec.cp, hostile = this.hostile.has(cp.id) && alive;
@@ -180,7 +235,7 @@ export class NPCs {
       rec.step = step;
       const dCamp = Math.hypot(px - cp.x, pz - cp.z);
       for (const c of rec.cultists) this.updateCultist(c, rec, dt, t, px, pz, player, step, hostile, dCamp);
-      for (const m of rec.camels) this.updateCamel(m, rec, dt, t, px, pz);
+
     }
   }
 
@@ -204,21 +259,30 @@ export class NPCs {
     }
     let pose = step, speed = 0, faceYaw = c.yaw;
     if (hostile && dCamp < 70) {
-      // defend the camp: run at the player with a dagger
       P.dagger.visible = true;
       const dx = px - c.x, dz = pz - c.z;
       faceYaw = Math.atan2(dx, dz);
-      if (d > 1.4) { speed = 3.4; pose = 'run'; }
+      if (c.spellAt !== undefined || (d >= CULT_MAGIC.minRange && d <= CULT_MAGIC.maxRange &&
+          t >= (c.nextSpell ?? 0) && t >= (rec.nextSpell ?? 0) && this.beginCast(c, rec, player, t))) {
+        pose = 'cast'; P.dagger.visible = false; c.attackT = 0;
+        if (t >= c.spellAt) {
+          this.throwSpell(c, cp.id);
+          c.spellAt = undefined;
+          c.nextSpell = t + rand(CULT_MAGIC.cooldownMin, CULT_MAGIC.cooldownMax);
+        }
+      } else if (d > 1.4) { speed = 3.4; pose = 'run'; }
       else {
         pose = 'stab'; c.attackT += dt;
         if (c.attackT > 1.5) { c.attackT = 0; if (this.onPlayerHit) this.onPlayerHit(7, 'cultist'); P.root.getWorldPosition(_a); this.audio.zAttack(_a); }
       }
     } else if (c.walker) {
+      c.spellAt = undefined;
       c.ang += dt * 0.11; speed = 1.1; pose = 'walk';
       const tx = cp.x + Math.cos(c.ang) * 10.5, tz = cp.z + Math.sin(c.ang) * 10.5;
       faceYaw = Math.atan2(tx - c.x, tz - c.z);
       P.dagger.visible = false;
     } else {
+      c.spellAt = undefined;
       // return to the seat if displaced
       const ds = Math.hypot(c.seat.x - c.x, c.seat.z - c.z);
       if (ds > 0.6) { speed = 1.4; pose = 'walk'; faceYaw = Math.atan2(c.seat.x - c.x, c.seat.z - c.z); }
@@ -244,7 +308,26 @@ export class NPCs {
     if (hostile || c.watch > 0) { let a = Math.atan2(px - c.x, pz - c.z) - c.yaw; a = Math.atan2(Math.sin(a), Math.cos(a)); wantHead = clamp(a, -1.4, 1.4); }
     c.headYaw = damp(c.headYaw, wantHead, 4, dt);
     this.pose(c, pose, dt, t + c.phase);
+    if (pose === 'cast') {
+      P.armR.localToWorld(_a.set(0, -0.65, 0));
+      this.fx.emit(_a, 1, spellColor, 0.45, 0.16, null, 0.25);
+    }
     P.head.rotation.y = c.headYaw;
+  }
+
+  beginCast(c, rec, player, t) {
+    const fromY = this.world.hgt(c.x, c.z) + 1.35;
+    const p = player.pos;
+    const target = this.spellTarget.set(p.x, p.y + Math.max(0.45, player.eyeH - 0.28), p.z);
+    const dir = this.spellDirection.set(target.x - c.x, target.y - fromY, target.z - c.z);
+    const length = dir.length();
+    dir.multiplyScalar(1 / length);
+    if (this.world.rayHit(c.x, fromY, c.z, dir.x, dir.y, dir.z, length) < length - 0.35) return false;
+    c.spellAim = target.clone();
+    c.spellAt = t + CULT_MAGIC.windup;
+    rec.nextSpell = t + CULT_MAGIC.campInterval;
+    this.audio.cultistMagic({ x: c.x, y: fromY, z: c.z }, 'charge');
+    return true;
   }
 
   pose(c, pose, dt, t) {
@@ -258,6 +341,7 @@ export class NPCs {
       case 'sit': target.y = -0.72; target.skirt = 0.45; target.torso = 0.05; target.aL = -0.6; target.aR = -0.6; target.head = Math.sin(t * 0.5) * 0.1; break;
       case 'walk': target.aL = Math.sin(t * 5) * 0.3; target.aR = -Math.sin(t * 5) * 0.3; target.torso = 0.08; target.y = Math.abs(Math.sin(t * 5)) * 0.04; break;
       case 'run': target.aL = Math.sin(t * 9) * 0.7; target.aR = -1.2; target.torso = 0.3; target.y = Math.abs(Math.sin(t * 9)) * 0.08; break;
+      case 'cast': target.aR = -2 + chant; target.aL = -1.1; target.zR = -0.32; target.torso = 0.12; break;
       case 'stab': { const k = (c.attackT / 1.5); target.aR = k < 0.5 ? lerp(-0.5, -2.8, k * 2) : lerp(-2.8, -1.0, (k - 0.5) * 4); target.torso = k > 0.5 ? 0.4 : 0.1; target.aL = -0.4; break; }
       default: target.head = Math.sin(t * 0.4) * 0.1;
     }
@@ -268,45 +352,7 @@ export class NPCs {
     P.head.rotation.x = p.head;
   }
 
-  updateCamel(m, rec, dt, t, px, pz) {
-    const P = m.P, cp = rec.cp, W = this.world;
-    const d = Math.hypot(px - m.x, pz - m.z);
-    if (m.dead) {
-      m.deadT += dt; const k = clamp(m.deadT / 1.2, 0, 1);
-      m.sit = damp(m.sit, 1, 4, dt); this.camelPose(m, t, 0);
-      P.root.rotation.set(0, m.yaw, k * 1.35, 'YXZ');
-      this.lod(P, d); return;
-    }
-    m.t -= dt;
-    m.groanT -= dt;
-    if (m.groanT <= 0) { m.groanT = rand(12, 30); if (d < 60) { P.root.getWorldPosition(_a); _a.y += 2; this.audio.camel(_a); } }
-    if (m.t <= 0) {
-      const r = Math.random();
-      if (r < 0.45) { m.state = 'wander'; const a = Math.random() * 6.28, rr = rand(14, 24); m.tx = cp.x + Math.cos(a) * rr; m.tz = cp.z + Math.sin(a) * rr; m.t = 20; }
-      else if (r < 0.75) { m.state = 'idle'; m.t = rand(4, 10); }
-      else { // walk over to the bonfire and sit down
-        m.state = 'gotoSit'; const a = Math.random() * 6.28; m.tx = cp.x + Math.cos(a) * 6.5; m.tz = cp.z + Math.sin(a) * 6.5; m.t = 30;
-      }
-    }
-    let speed = 0;
-    if (m.state === 'wander' || m.state === 'gotoSit') {
-      const dx = m.tx - m.x, dz = m.tz - m.z, dd = Math.hypot(dx, dz);
-      if (dd < 1.2) { if (m.state === 'gotoSit') { m.state = 'sit'; m.t = rand(10, 20); } else { m.state = 'idle'; m.t = rand(3, 8); } }
-      else {
-        speed = 0.9;
-        let ty = Math.atan2(dx, dz), diff = Math.atan2(Math.sin(ty - m.yaw), Math.cos(ty - m.yaw));
-        m.yaw += clamp(diff, -1.2 * dt, 1.2 * dt);
-        if (Math.abs(diff) < 0.6) { m.x += Math.sin(m.yaw) * speed * dt; m.z += Math.cos(m.yaw) * speed * dt; W.resolve(m, 0.9); }
-      }
-    }
-    m.speed = damp(m.speed, speed, 3, dt);
-    m.sit = damp(m.sit, m.state === 'sit' ? 1 : 0, 1.5, dt);
-    P.root.position.set(m.x, W.hgt(m.x, m.z), m.z);
-    P.root.rotation.set(0, m.yaw, 0);
-    if (!this.lod(P, d)) return;
-    m.ph += dt * (0.5 + m.speed * 2.6);
-    this.camelPose(m, t, m.speed);
-  }
+
 
   camelPose(m, t, speed) {
     const P = m.P, s = m.sit, A = clamp(speed / 0.9, 0, 1);

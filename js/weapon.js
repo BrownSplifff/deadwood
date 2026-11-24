@@ -189,7 +189,7 @@ export class Weapon {
     this.dir.addScaledVector(this.right, Math.cos(a) * r).addScaledVector(this.up, Math.sin(a) * r).normalize();
     const o = this.org.copy(cam.position), d = this.dir;
     this.muzzleLight.position.copy(o).addScaledVector(d, 0.9); this.muzzleLight.intensity = def.id === 'glock' ? 4 : 7; this.muzzleT = 0.05;
-    this.zombies.alert(o.x, o.z, def.loud);
+    this.zombies.alert(o.x, o.z, def.loud * (this.hooks.hearing?.() ?? 1));
     this.hooks.onShot && this.hooks.onShot(def, o);
     const tw = this.world.rayHit(o.x, o.y, o.z, d.x, d.y, d.z, RANGE);
     const maxT = Math.min(tw, RANGE);

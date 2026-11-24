@@ -687,8 +687,9 @@ export function createDesert(ctx) {
     if (D.extraFlames) for (const f of D.extraFlames()) {
       const k = 0.8 + Math.sin(t * 9 + f.userData.ph) * 0.12 + Math.random() * 0.08;
       f.scale.set(1.5 * k, 1.5 * k, 1);
-      const dd = Math.hypot(f.position.x - px, f.position.z - pz);
-      if (dd < 40) cands.push([dd, f.position.x, f.position.y, f.position.z]);
+      f.getWorldPosition(tmp);
+      const dd = Math.hypot(tmp.x - px, tmp.z - pz);
+      if (dd < 40) cands.push([dd, tmp.x, tmp.y, tmp.z]);
     }
     cands.sort((a, b) => a[0] - b[0]);
     torchLights.forEach((l, i) => {

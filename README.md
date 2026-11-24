@@ -34,7 +34,9 @@ no downloaded assets.
 20. [Graphics settings and performance](#20-graphics-settings-and-performance)
 21. [Code architecture](#21-code-architecture)
 22. [Tuning guide](#22-tuning-guide)
-23. [Debugging](#23-debugging)
+23. [Deep Forest, companions and waystones](#23-deep-forest-companions-and-waystones)
+24. [Railway, weather and suspense](#24-railway-weather-and-suspense)
+25. [Debugging](#25-debugging)
 
 ---
 
@@ -48,7 +50,7 @@ python -m http.server 8080          # then open http://localhost:8080
 start.bat                           # Windows: double-click
 ```
 
-Use desktop Chrome, Edge or Firefox. Click **Play Game** — the game captures the mouse (pointer
+Use desktop Chrome, Edge or Firefox. Click **New Game** or **Continue** — the game captures the mouse (pointer
 lock). Headphones are recommended: most enemies are positional sounds before you see them.
 
 ---
@@ -70,7 +72,9 @@ lock). Headphones are recommended: most enemies are positional sounds before you
 | F | Flashlight on/off |
 | B | Replace flashlight battery (uses a battery from the inventory) |
 | H | Use a medical kit |
-| E | Pick up the item in front of you |
+| E | Pick up loot, use a waystone, inspect an animal, mount or dismount |
+| J | Inspect or manage a nearby animal |
+| WASD / Shift / Space while mounted | Steer, gallop, jump on a horse |
 | Tab | Open/close the inventory (pauses the game) |
 | G | Drop the selected item (inventory open) |
 | M | Expand / shrink the map |
@@ -245,8 +249,9 @@ kneel and pray (7 s), sit (9 s) — while chanting. When you come within 26 m so
 and watch you for a few seconds, then return to the ritual.
 
 They are **neutral**. If anything in the camp is hurt (a cultist or a camel), **that camp turns
-hostile**: every cultist within 70 m of the camp draws a dagger, runs at you (3.4 m/s) and stabs
-for 7 damage every 1.5 s. Cultists have 60 health (headshot kills) and may drop cloth or coins.
+hostile**. Cultists raise a glowing hand before throwing a purple bolt from 5–28 m away. Bolts
+deal 12 damage and break on solid cover. Up close, cultists charge with daggers and stab for
+7 damage every 1.5 s. Cultists have 60 health (headshot kills) and may drop cloth or coins.
 
 ### Camels (desert camps)
 Two per camp. They wander slowly around the camp (pacing gait), stand and look around, and walk
@@ -501,7 +506,7 @@ Each biome has an **atmosphere config**, and the game blends them by where you s
 | Drifting sand | — | — | yes | — |
 | Wind | full | soft | gentle | faint |
 
-- **Two moons:** a white moon (casts shadows) and a smaller **red moon** that adds faint red light.
+- **Two moons:** the white moon casts shadows. The red moon has a cratered disk about ten times its former visible diameter and adds faint red light.
 - **Dark sectors:** within them, and only away from spawn, light falls to ~5% and fog closes to
   22 m. A low drone starts and the stars and moons vanish. "It is too dark here…"
 - **Lights:**
@@ -652,7 +657,7 @@ and +30% weapon damage, and the infection **can never be cured** in this life.
   territories, the camp and your position.
 
 **Menus**
-- **Main menu:** Play Game, Controls, Settings; the camera slowly circles the campfire.
+- **Main menu:** Continue, New Game, Controls, Settings; the camera slowly circles the campfire.
 - **Pause (Esc, or when the window loses focus):** Resume, Restart, sensitivity, volume, graphics
   quality, Return to Main Menu.
 - **Settings** are saved in the browser.
@@ -668,7 +673,7 @@ panning and distance falloff), with a shared reverb. Nearby enemies get louder a
 |---|---|
 | Weapons | separate gunshot recipes for rifle, Glock and sniper, reloads, bolt cycling, empty clicks, weapon switching |
 | Player | footsteps, splashes, jumps and landings, pain, heartbeat, eating, drinking, zombie-like breathing when infected, death |
-| Environment | wind (per biome), campfire crackle, crickets, a dark-sector drone, creaking ropes and whispers in the Hanging Woods, cultist chanting from the nearest camp, a sand-worm rumble |
+| Environment | quiet forest wind, flowing water near rivers, dry sand gusts in the desert, campfire crackle, crickets, a dark-sector drone, creaking ropes and whispers in the Hanging Woods, cultist chanting from the nearest camp, a sand-worm rumble |
 | Enemies | zombie growls, footsteps, attacks, hurt and death, the Butcher's machete, the Mummy's roars and chant, bandage whips, the slam boom, acid spit and gurgle, dog barks and yelps, worm roars, sand eruptions, rope snaps |
 | Wildlife | crows, owls, bats, wing flaps |
 
@@ -730,7 +735,16 @@ js/structures.js  desert planning, Great Pyramid maze + boss chamber, small pyra
 js/zombies.js     humanoid model builder, zombie types (walker/runner/sprinter/giant/Butcher),
                   AI, steering, per-limb hit tests, limb breaking, crawling, dormant & buried states
 js/hazards.js     the Hanging Dead and acid projectiles
-js/npcs.js        cultists (ritual, watching, hostility) and camels
+js/npcs.js        cultists and shared camel rig and gait
+js/twisted.js     Twisted balance and quadrupedal poses
+js/animals.js     horse rig, species balance, animal movement, combat and state
+js/companions.js  feeding, trust, inspection, naming and companion HUD
+js/waystones.js   deterministic markers, effects and safe arrival positions
+js/save.js        versioned IndexedDB records and transactional writes
+js/campaign.js    waystone menus, save capture and restore, fast travel
+js/railway.js     streamed tracks, coach collision, dormant horde and persistent rewards
+js/weather.js     rain and sandstorm timing, particles, shelter and atmospheric blending
+js/suspense.js    spatial horror events, biome profiles and combat suppression
 js/dogs.js        infected dog packs
 js/worms.js       sand worms (tremor meter, tunnelling, eruption)
 js/mummy.js       the Ancient Mummy boss
@@ -792,11 +806,78 @@ Rendering is two passes: the world, then the gun on top.
 
 ---
 
-## 23. Debugging
+## 23. Deep Forest, companions and waystones
+
+Beyond 100 m from the campfire, ancient trees gradually replace smaller trees. The oldest stands
+have 25–60 m trees, thick trunks, exposed roots and deep shade. Look for orange hanging lanterns
+along the forest paths. Twisted use about 70% of eligible Deep Forest wave and roamer spawn slots.
+They may watch or stalk before charging on all fours. Their base stats are 160 HP, 2.5 m/s walking,
+8 m/s chasing, 35 m detection, a 4 m lunge initiation range and 18 attack damage. They drop infected
+flesh. Tune their combat values in `TWISTED` in `js/twisted.js`.
+
+Horses roam the forest and surrounding wilderness. Camels remain near desert ritual camps. The
+starting cabin has four grain. More appears at forest and camp loot spots. Inspect with **E** or **J**. Each grain heals 24 HP and
+adds 25 trust. At 100 trust you can befriend the animal. Replacing a companion requires
+confirmation and releases the former animal with its health and infection intact. Inspect a
+companion with **J** to name it or set Follow or Stay. Use **E** to mount and dismount. Shoot and
+aim with the usual controls while riding. Horses walk at 8 m/s and gallop at 18 m/s. Camels walk at
+7 m/s and run at 14 m/s. Zombies favor a nearby reachable companion, including while it is mounted.
+Animal death dismounts the rider and persists in a saved campaign.
+
+Feed infected flesh from the animal inspection panel. Each of the first nine pieces adds 10% of base
+maximum health and 5% of base movement speed, and subtracts 5 percentage points of defence. Current
+HP scales to preserve its percentage, and damage received is divided by defence. At nine pieces,
+the animal has 190% maximum HP, 145% movement speed and 55% defence. The tenth feeding requires
+confirmation and kills the animal. Grain heals without reversing infection. See `SPECIES` and
+`stats` in `js/animals.js`.
+
+Use **E** beside a waystone to awaken it and save. Activated waystones appear on the map and offer
+Save Game and Fast Travel. Travel works between activated stones and brings a living companion.
+Health, ammo and infection carry through the trip. Waystones are unavailable during a boss
+encounter, after recent damage, and during player transformation. Travel also checks nearby combat.
+
+**Continue** loads the latest valid waystone save from IndexedDB in the same browser profile and
+local server origin. Start a new game with confirmation when a save exists. The previous save is
+replaced at the next successful waystone save. Saves store progression, player and animal stats,
+discovered map areas, loot changes, defeated persistent enemies and current wave state. World
+geometry is reconstructed from the versioned seed. Incidental threats such as roaming dog packs
+and airborne projectiles are generated again as gameplay resumes.
+
+## 24. Railway, weather and suspense
+
+An abandoned railway cuts through the forest and Deep Forest. Rusted rails, broken sleepers and
+damaged bridges lead to four coaches, including a derailed coach. Enter through a side doorway.
+Look beneath the seats for supplies. Some bodies near the tracks are dormant zombies.
+
+One coach holds 18 dormant zombies. Entering, pressing **E** at a door, firing nearby or hitting an
+occupant wakes the horde. Some zombies climb through broken windows while others take the doors.
+The coach contains ammunition, medkits, batteries, food, water and a relic. Killed occupants and
+collected rewards stay gone when the coach streams out and when you continue from a waystone save.
+Tune the horde and gunshot wake radius in `RAIL` in `js/railway.js`.
+
+Forest weather alternates between 3–8 minutes of clear weather and 1–3 minutes of light, moderate
+or heavy rain. Rare thunderstorms add brief lightning and delayed thunder. Rain limits visibility
+and masks footsteps and gunshots. The flashlight reveals nearby droplets, and dense canopy reduces
+the amount of rain reaching the ground.
+
+Desert storms progress from a warning to an approaching wall of dust, then an active storm and
+dissipation. A severe storm reduces sight to about 18 m, slows movement by up to 15%, muffles
+gunshots and reduces enemy detection. Shelters block rain and airborne sand. Rain sounds muffled
+indoors and rings against coach roofs. Storm timers continue while you shelter. Adjust durations,
+thunder frequency and rain particle budgets in `WEATHER` in `js/weather.js`.
+
+The suspense director chooses spatial sounds for forests, Hanging Woods, railway coaches, deserts
+and shelter. Events range from branch snaps and footsteps to distant train whistles and silence.
+It spaces them out and suppresses them in combat. Set interval ranges in `SUSPENSE` in
+`js/suspense.js`. Sound recipes and weather mixes are in `js/audio.js`.
+
+## 25. Debugging
 
 - `index.html?debug` runs without pointer lock (handy for automated testing).
   `?debug&autostart` starts immediately.
 - `window.__dw` exposes the live game objects in the browser console:
+  - `railway.coaches` lists coach coordinates. `weather.force('rain', 'thunderstorm')` or
+    `weather.force('sand', 'active')` forces the specified weather to develop in its biome.
   - `G`, `player`, `weapon`, `zombies`, `world`, `inventory`;
-  - `mummy`, `dogs`, `worms`, `hanging`, `npcs`, `PROGRESS`;
+  - `mummy`, `dogs`, `worms`, `hanging`, `npcs`, `PROGRESS`, `animals`, `companions`, `campaign`;
   - helpers such as `useType('med')`, `eatFlesh()`, `dropItem()`, `startWave()`, `damagePlayer()`.

@@ -49,7 +49,9 @@
     <h1 class="title">DEADWOOD</h1>
     <p class="tag">The forest remembers. The dead do not rest.</p>
     <div class="buttons">
-      <button id="btn-play" class="big">Play Game</button>
+      <button id="btn-continue" class="big" disabled>Continue</button>
+      <button id="btn-play" class="big">New Game</button>
+      <p id="save-status" role="status"></p>
       <button id="btn-controls">Controls</button>
       <button id="btn-settings">Settings</button>
     </div>
@@ -59,14 +61,14 @@
   <section id="controls" class="screen hidden">
     <h2>Controls</h2>
     <table class="keys">
-      <tr><td>W A S D</td><td>Move</td></tr>
+      <tr><td>W A S D</td><td>Move / steer mount</td></tr>
       <tr><td>Mouse</td><td>Look / aim</td></tr>
       <tr><td>Left click</td><td>Shoot (hold for auto fire)</td></tr>
       <tr><td>Right click</td><td>Aim down sights / scope</td></tr>
       <tr><td>1 2 3 / Wheel</td><td>Rifle, Glock, Sniper</td></tr>
       <tr><td>R</td><td>Reload</td></tr>
-      <tr><td>Shift</td><td>Sprint</td></tr>
-      <tr><td>Space</td><td>Jump</td></tr>
+      <tr><td>Shift</td><td>Sprint / gallop while mounted</td></tr>
+      <tr><td>Space</td><td>Jump on foot or on horseback</td></tr>
       <tr><td>Ctrl (or C)</td><td>Crouch (hold)</td></tr>
       <tr><td>X</td><td>Sit down / stand up</td></tr>
       <tr><td>F</td><td>Flashlight</td></tr>
@@ -76,7 +78,8 @@
       <tr><td>G</td><td>Drop selected item (inventory open)</td></tr>
       <tr><td>M</td><td>Expand map</td></tr>
       <tr><td>Shift (scoped)</td><td>Hold breath</td></tr>
-      <tr><td>E</td><td>Collect supplies</td></tr>
+      <tr><td>E</td><td>Collect supplies, use waystone, inspect animal, mount / dismount</td></tr>
+      <tr><td>J</td><td>Inspect or manage nearby animal</td></tr>
       <tr><td>Esc</td><td>Pause</td></tr>
     </table>
     <div class="buttons"><button class="back" data-back="menu">Back</button></div>
@@ -115,7 +118,7 @@
 
 <section id="inventory" class="hidden">
   <div class="inv-panel">
-    <div class="inv-head"><h2>INVENTORY</h2><button id="inv-close">Close [Tab]</button></div>
+    <div class="inv-head"><h2>INVENTORY</h2><span>Grain ∞</span><button id="inv-close">Close [Tab]</button></div>
     <div class="inv-body"><div class="inv-grid"></div><div class="inv-info"></div></div>
     <div class="inv-menu hidden"></div>
     <div id="inv-confirm" class="hidden"><p><b>WARNING</b><br>A sixth piece of infected flesh will complete the infection.<br>You will turn. This cannot be undone.</p><div><button id="inv-yes">Eat it anyway</button><button id="inv-no">Put it away</button></div></div>

@@ -77,6 +77,11 @@ export class Minimap {
         if (!this.isRevealed(mk.x, mk.z)) continue;
         ctx.fillStyle = '#e8d4a8'; ctx.fillText(mk.label, P(mk.x) * k, P(mk.z) * k - (mk.dot ? 6 * dp : (mk.d * S * k) / 2 + 4));
       }
+      for (const stone of this.waystones?.nodes ?? []) if (this.waystones.active.has(stone.id)) {
+        const x = P(stone.x) * k, z = P(stone.z) * k;
+        ctx.fillStyle = '#a5ffe1'; ctx.fillRect(x - 3 * dp, z - 3 * dp, 6 * dp, 6 * dp);
+        if (stone.id !== 'camp') ctx.fillText(stone.name, x, z + 13 * dp);
+      }
       ctx.fillStyle = '#ffb35a'; ctx.beginPath(); ctx.arc(P(CAMP.x) * k, P(CAMP.z) * k, 3.5 * dp, 0, 7); ctx.fill();
       ctx.fillStyle = '#e4d6c4'; ctx.fillText('CAMP', P(CAMP.x) * k, P(CAMP.z) * k + 14 * dp);
       this.arrow(ctx, P(p.x) * k, P(p.z) * k, -yaw, 8 * dp);

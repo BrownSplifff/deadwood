@@ -3,6 +3,7 @@
 //  Item behaviour (what "Use" does) lives in main.js; this module only knows the data.
 // =====================================================================================
 export const ITEMS = {
+  grain: { name: 'Grain', icon: '❧', color: '#c4a16a', stack: 12, desc: 'Animal feed. Heals and builds trust.' },
   ammo:    { name: 'Ammo Box', icon: '▤', color: '#b8a84a', stack: 10, use: 'Load', desc: 'Rounds for all three guns. Used automatically when you reload with an empty reserve.' },
   med:     { name: 'Medical Kit', icon: '✚', color: '#e05050', stack: 5, use: 'Use', desc: 'Restores 50 health. Quick use: H.' },
   battery: { name: 'Battery', icon: '▮', color: '#5ad8ff', stack: 5, use: 'Swap', desc: 'Fresh flashlight battery. Quick use: B.' },
@@ -21,7 +22,10 @@ export class Inventory {
   constructor(size = 12) { this.size = size; this.slots = new Array(size).fill(null); this.onChange = null; }
   clear() { this.slots.fill(null); this.changed(); }
   changed() { if (this.onChange) this.onChange(); }
-  count(type) { return this.slots.reduce((n, s) => n + (s && s.type === type ? s.n : 0), 0); }
+  count(type) {
+    if (type === 'grain') return Infinity;
+    return this.slots.reduce((n, s) => n + (s && s.type === type ? s.n : 0), 0);
+  }
   /** add n items; returns how many did NOT fit */
   add(type, n = 1) {
     const max = ITEMS[type].stack;
@@ -42,6 +46,7 @@ export class Inventory {
     this.changed(); return k;
   }
   remove(type, n = 1) {
+    if (type === 'grain') return n;
     let done = 0;
     for (let i = this.size - 1; i >= 0 && done < n; i--) if (this.slots[i] && this.slots[i].type === type) done += this.removeAt(i, n - done);
     return done;

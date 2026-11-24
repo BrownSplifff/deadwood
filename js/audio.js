@@ -99,7 +99,9 @@ export class GameAudio {
     g.gain.linearRampToValueAtTime(peak, t + a);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f); f.connect(g); g.connect(dest);
-    if (o.rev) { const s = ctx.createGain(); s.gain.value = o.rev; g.connect(s); s.connect(this.rev); }
+    let send;
+    if (o.rev) { send = ctx.createGain(); send.gain.value = o.rev; g.connect(send); send.connect(this.rev); }
+    src.onended = () => { src.disconnect(); f.disconnect(); g.disconnect(); send?.disconnect(); };
     src.start(t, Math.random() * 1.5, dur + 0.05);
   }
   tone(dest, o) {
@@ -114,6 +116,7 @@ export class GameAudio {
     g.gain.linearRampToValueAtTime(o.gain ?? 0.5, t + (o.attack ?? 0.003));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     osc.connect(g); g.connect(dest);
+    osc.onended = () => { osc.disconnect(); g.disconnect(); };
     osc.start(t); osc.stop(t + dur + 0.05);
   }
 
@@ -121,18 +124,19 @@ export class GameAudio {
   gun(kind = 'rifle') {
     if (!this.ctx) return;
     const d = this.master;
+    const muffle = 1 - (this.shotMuffle ?? 0) * 0.68;
     if (kind === 'glock') {
-      this.noise(d, { dur: 0.2, type: 'lowpass', f: 7000, f2: 700, gain: 0.8, rev: 0.45 });
-      this.noise(d, { dur: 0.035, type: 'highpass', f: 3000, gain: 0.7 });
+      this.noise(d, { dur: 0.2, type: 'lowpass', f: 7000 * muffle, f2: 700, gain: 0.8, rev: 0.45 });
+      this.noise(d, { dur: 0.035, type: 'highpass', f: 3000, gain: 0.7 * muffle });
       this.tone(d, { f: 260, f2: 70, dur: 0.12, gain: 0.55 });
     } else if (kind === 'sniper') {
-      this.noise(d, { dur: 0.7, type: 'lowpass', f: 9000, f2: 220, gain: 1.25, rev: 1.0 });
-      this.noise(d, { dur: 0.06, type: 'highpass', f: 1800, gain: 1.0 });
+      this.noise(d, { dur: 0.7, type: 'lowpass', f: 9000 * muffle, f2: 220, gain: 1.25, rev: 1.0 });
+      this.noise(d, { dur: 0.06, type: 'highpass', f: 1800, gain: muffle });
       this.tone(d, { f: 120, f2: 28, dur: 0.45, gain: 1.0 });
       this.noise(d, { t: 0.25, dur: 1.4, type: 'lowpass', f: 600, f2: 120, gain: 0.25, attack: 0.2 });
     } else {
-      this.noise(d, { dur: 0.3, type: 'lowpass', f: 8000, f2: 450, gain: 1.0, rev: 0.6 });
-      this.noise(d, { dur: 0.05, type: 'highpass', f: 2200, gain: 0.8 });
+      this.noise(d, { dur: 0.3, type: 'lowpass', f: 8000 * muffle, f2: 450, gain: 1.0, rev: 0.6 });
+      this.noise(d, { dur: 0.05, type: 'highpass', f: 2200, gain: 0.8 * muffle });
       this.tone(d, { f: 170, f2: 38, dur: 0.2, gain: 0.9 });
     }
   }
@@ -383,6 +387,18 @@ export class GameAudio {
     this.tone(d, { f: 220, f2: 160, dur: 0.6, gain: 0.35, type: 'sawtooth', attack: 0.05 });
     this.noise(d, { dur: 0.6, type: 'bandpass', f: 900, q: 3, gain: 0.3 });
   }
+  cultistMagic(pos, stage) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    if (stage === 'charge') {
+      this.tone(d, { f: 210, f2: 570, dur: 0.6, gain: 0.15, type: 'triangle', rev: 0.6 });
+    } else if (stage === 'throw') {
+      this.noise(d, { dur: 0.26, type: 'bandpass', f: 2400, f2: 540, q: 2, gain: 0.38, rev: 0.5 });
+    } else {
+      this.tone(d, { f: 160, f2: 60, dur: 0.19, gain: 0.24, type: 'triangle' });
+      this.noise(d, { dur: 0.27, type: 'highpass', f: 1500, gain: 0.22, rev: 0.5 });
+    }
+  }
   camel(pos, pain = false) {
     if (!this.ctx) return;
     const ctx = this.ctx, t = ctx.currentTime, d = this.dest(pos), dur = pain ? 0.6 : 1.3;
@@ -453,7 +469,89 @@ export class GameAudio {
     if (pos) this.setPos(this.chant.p, pos);
     this.chant.g.gain.setTargetAtTime(0.6 * k, this.ctx.currentTime, 0.4);
   }
-  setWind(k) { if (this.windGain) this.windGain.gain.setTargetAtTime(0.5 * k, this.ctx.currentTime, 0.8); }
+  setSuspenseSilence(on) {
+    this.silence = on ? 0.05 : 1;
+  }
+  setOutdoorAmbience(wind, river, desert) {
+    if (!this.riverGain) return;
+    const now = this.ctx.currentTime;
+    this.riverGain.gain.setTargetAtTime(0.55 * river * (this.silence ?? 1), now, 0.3);
+    this.dryWindGain.gain.setTargetAtTime(wind * (0.018 + 0.14 * desert) * (this.silence ?? 1), now, 0.55);
+    this.dryWindFilter.frequency.setTargetAtTime(560 + 950 * desert, now, 0.55);
+  }
+  setWeather(rain, sand, sheltered, metal) {
+    if (!this.weatherRain) return;
+    const now = this.ctx.currentTime, quiet = this.silence ?? 1;
+    this.weatherRain.gain.setTargetAtTime(rain * (sheltered ? 0.13 : 0.29) * quiet, now, 0.55);
+    this.weatherFilter.frequency.setTargetAtTime(sheltered ? (metal ? 680 : 300) : 2000, now, 0.5);
+    this.weatherRoof.gain.setTargetAtTime(metal ? rain * 0.24 * quiet : 0, now, 0.45);
+    this.weatherStorm.gain.setTargetAtTime(sand * (sheltered ? 0.04 : 0.33) * quiet, now, 0.6);
+    this.shotMuffle = sand * (sheltered ? 0 : 1);
+    this.creatureMuffle = sheltered ? 1 : 1 - rain * 0.32 - sand * 0.27;
+  }
+  railStep() {
+    if (!this.ctx) return;
+    this.noise(this.master, { dur: 0.095, type: 'bandpass', f: 1900, f2: 900, q: 4, gain: 0.23, rev: 0.48 });
+    this.tone(this.master, { f: 146, f2: 87, dur: 0.13, gain: 0.085, type: 'triangle' });
+  }
+
+  horror(event, pos, volume = 1) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.pruneHorror(now);
+    if (this.horrorSources.length >= 7 && event !== 'horde' && event !== 'thunder') return;
+    const dest = this.dest(pos);
+    if (dest !== this.master) this.horrorSources.push({ dest, until: now + 9 });
+    const noise = (f, f2, dur, gain, o = {}) => this.noise(dest, { f, f2, dur, gain: gain * volume, rev: 0.38, ...o });
+    const tone = (f, f2, dur, gain, o = {}) => this.tone(dest, { f, f2, dur, gain: gain * volume, rev: 0.42, ...o });
+    switch (event) {
+      case 'thunder':
+        noise(240, 36, 3.1, 1.8, { brown: true, attack: 0.13, rev: 0.85 });
+        noise(2100, 155, 0.45, 0.8, { t: 0.08 }); tone(47, 24, 3.2, 0.35, { attack: 0.18 }); break;
+      case 'whistle':
+        tone(325, 313, 2.1, 0.28, { type: 'triangle', attack: 0.34, rev: 0.8 });
+        tone(432, 419, 1.9, 0.15, { t: 0.1, attack: 0.32 }); break;
+      case 'metal': case 'chain': case 'door':
+        tone(event === 'door' ? 104 : 780, 126, 0.59, 0.21, { type: 'triangle' });
+        for (let i = 0; i < 4; i++) noise(3500 - i * 530, 700, 0.14, 0.33 / (i + 1), { t: i * 0.11, type: 'bandpass', q: 5 }); break;
+      case 'groan':
+        tone(123, 49, 2.3, 0.24, { type: 'triangle', attack: 0.48 });
+        noise(430, 104, 1.65, 0.7, { brown: true, attack: 0.28 }); break;
+      case 'branch': case 'twig':
+        noise(2800, 850, 0.085, 0.72, { type: 'bandpass' });
+        noise(540, 125, 0.29, 0.64, { brown: true, t: 0.024 }); break;
+      case 'scratch': case 'rustle': case 'sand': case 'clicks': case 'twisted':
+        for (let i = 0; i < (event === 'clicks' ? 6 : 4); i++) {
+          const f = event === 'sand' ? 1700 : event === 'twisted' ? 660 : 2400;
+          noise(f + Math.random() * 900, f * 0.48, event === 'clicks' ? 0.055 : 0.19, 0.38,
+            { t: i * (event === 'clicks' ? 0.105 : 0.21), type: 'bandpass', q: 3 });
+        }
+        if (event === 'twisted') noise(480, 270, 0.94, 0.66, { brown: true, attack: 0.1 }); break;
+      case 'steps': case 'thud':
+        noise(310, 52, 0.37, 0.95, { brown: true });
+        if (event === 'steps') noise(2100, 530, 0.12, 0.3);
+        else tone(48, 28, 0.65, 0.23); break;
+      case 'scream':
+        tone(780, 290, 1.2, 0.5, { type: 'sawtooth', attack: 0.14, rev: 0.95 });
+        noise(1900, 870, 0.83, 0.32, { attack: 0.11, type: 'bandpass' }); break;
+      case 'horde':
+        for (let i = 0; i < 4; i++) {
+          tone(105 - i * 9, 43 + i * 4, 0.9 + i * 0.17, 0.25, { type: 'sawtooth', attack: 0.12, t: i * 0.11 });
+          noise(690, 149, 1.2, 0.7, { t: i * 0.13, brown: true, attack: 0.16 });
+        }
+        break;
+      default: // breathy whispers and distant coughing
+        for (let i = 0; i < 3; i++) noise(850 + i * 380, 480 + 230 * i, 0.23, 0.45,
+          { t: i * 0.31, type: 'bandpass', q: 4, attack: event === 'cough' ? 0.018 : 0.07 });
+    }
+  }
+
+  pruneHorror(now) {
+    this.horrorSources ??= [];
+    for (let i = this.horrorSources.length - 1; i >= 0; i--) if (this.horrorSources[i].until <= now) {
+      this.horrorSources[i].dest.disconnect(); this.horrorSources.splice(i, 1);
+    }
+  }
 
   dogBark(pos, bite = false) {
     if (!this.ctx) return;
@@ -496,26 +594,46 @@ export class GameAudio {
   // ---------- ambience ----------
   startAmbience() {
     const ctx = this.ctx;
-    // wind
+    const weatherBed = (buffer, type, freq, q = 0.7) => {
+      const source = ctx.createBufferSource(); source.buffer = buffer; source.loop = true;
+      const filter = ctx.createBiquadFilter(); filter.type = type; filter.frequency.value = freq; filter.Q.value = q;
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      source.connect(filter); filter.connect(gain); gain.connect(this.master); source.start();
+      return [gain, filter];
+    };
+    [this.weatherRain, this.weatherFilter] = weatherBed(this.white, 'lowpass', 2000);
+    [this.weatherRoof] = weatherBed(this.white, 'bandpass', 1350, 5.5);
+    [this.weatherStorm] = weatherBed(this.brown, 'bandpass', 240);
+    // River flow, with slow variations beneath its distance-controlled volume.
     const wind = ctx.createBufferSource(); wind.buffer = this.brown; wind.loop = true;
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 380; bp.Q.value = 0.7;
     const wg = ctx.createGain(); wg.gain.value = 0.5;
-    this.windGain = wg;
+    const river = ctx.createGain(); river.gain.value = 0;
+    this.riverGain = river;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.11;
     const lg = ctx.createGain(); lg.gain.value = 0.3;
     lfo.connect(lg); lg.connect(wg.gain);
     const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.07;
     const lg2 = ctx.createGain(); lg2.gain.value = 160;
     lfo2.connect(lg2); lg2.connect(bp.frequency);
-    wind.connect(bp); bp.connect(wg); wg.connect(this.master);
+    wind.connect(bp); bp.connect(wg); wg.connect(river); river.connect(this.master);
     wind.start(); lfo.start(); lfo2.start();
-    // faint whistle
+    // Dry wind. The desert blend raises the sandy hiss and its faint whistle.
     const w2 = ctx.createBufferSource(); w2.buffer = this.white; w2.loop = true;
+    const dry = ctx.createGain(); dry.gain.value = 0;
+    const hiss = ctx.createBiquadFilter(); hiss.type = 'bandpass'; hiss.frequency.value = 560; hiss.Q.value = 0.65;
+    this.dryWindGain = dry; this.dryWindFilter = hiss;
+    const gust = ctx.createGain(); gust.gain.value = 0.66;
+    const gustLfo = ctx.createOscillator(); gustLfo.frequency.value = 0.19;
+    const gustDepth = ctx.createGain(); gustDepth.gain.value = 0.3;
+    gustLfo.connect(gustDepth); gustDepth.connect(gust.gain);
+    w2.connect(hiss); hiss.connect(gust); gust.connect(dry); dry.connect(this.master);
+    gustLfo.start();
     const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 1100; bp2.Q.value = 14;
-    const g2 = ctx.createGain(); g2.gain.value = 0.012;
+    const g2 = ctx.createGain(); g2.gain.value = 0.075;
     const l3 = ctx.createOscillator(); l3.frequency.value = 0.13;
-    const lg3 = ctx.createGain(); lg3.gain.value = 0.01; l3.connect(lg3); lg3.connect(g2.gain);
-    w2.connect(bp2); bp2.connect(g2); g2.connect(this.master);
+    const lg3 = ctx.createGain(); lg3.gain.value = 0.06; l3.connect(lg3); lg3.connect(g2.gain);
+    w2.connect(bp2); bp2.connect(g2); g2.connect(dry);
     w2.start(); l3.start();
     // crickets
     const cr = ctx.createOscillator(); cr.type = 'sine'; cr.frequency.value = 4300;
@@ -535,14 +653,19 @@ export class GameAudio {
     const ctx = this.ctx;
     this.firePanner = this.panner(this.firePos);
     this.firePanner.refDistance = 4;
+    this.firePanner.distanceModel = 'linear';
+    this.firePanner.maxDistance = 22;
+    this.firePanner.rolloffFactor = 1;
     const s = ctx.createBufferSource(); s.buffer = this.brown; s.loop = true;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
-    const g = ctx.createGain(); g.gain.value = 0.45;
+    const g = ctx.createGain(); g.gain.value = 0.16;
     s.connect(lp); lp.connect(g); g.connect(this.firePanner);
     s.start();
   }
   update(dt) {
-    if (!this.ctx || !this.firePanner || this.ctx.state !== 'running') return;
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    this.pruneHorror(this.ctx.currentTime);
+    if (!this.firePanner) return;
     if (Math.random() < dt * 10) {
       this.noise(this.firePanner, { dur: 0.01 + Math.random() * 0.03, type: 'bandpass', f: 2000 + Math.random() * 4000, q: 2, gain: 0.25 + Math.random() * 0.35 });
     }
