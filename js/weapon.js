@@ -193,14 +193,24 @@ export class Weapon {
     this.hooks.onShot && this.hooks.onShot(def, o);
     const tw = this.world.rayHit(o.x, o.y, o.z, d.x, d.y, d.z, RANGE);
     const maxT = Math.min(tw, RANGE);
-    const zh = this.zombies.rayHit(o, d, maxT);
+    let zh = this.zombies.rayHit(o, d, maxT);
+    const dmgMul = this.hooks.dmgMul ? this.hooks.dmgMul() : 1;
+    const ex = this.hooks.extraRay ? this.hooks.extraRay(o, d, zh ? zh.t : maxT) : null;
+    if (ex) {
+      zh = null;
+      const hp = this.hp.copy(o).addScaledVector(d, ex.t);
+      this.fx.emit(hp, 8, ex.color || 0x7a0c0c, 3, 0.5, { x: -d.x, y: -d.y, z: -d.z }, 8);
+      this.audio.impact(hp, 'flesh');
+      const res = ex.apply(def.dmg * dmgMul, hp);
+      this.hooks.onHit(res, ex.zone);
+    }
     if (zh) {
       const hp = this.hp.copy(o).addScaledVector(d, zh.t);
       this.fx.emit(hp, zh.zone === 'head' ? 18 : 8, 0x7a0c0c, 3.2, 0.5, { x: -d.x, y: -d.y, z: -d.z }, 8);
       this.audio.impact(hp, 'flesh');
-      const res = this.zombies.damage(zh.z, def.dmg, zh.zone);
+      const res = this.zombies.damage(zh.z, def.dmg * dmgMul, zh.zone);
       this.hooks.onHit(res, zh.zone, zh.z);
-    } else if (tw !== Infinity) {
+    } else if (!ex && tw !== Infinity) {
       const hp = this.hp.copy(o).addScaledVector(d, tw);
       const k = this.world.hitKind;
       if (k === 'water') this.fx.emit(hp, 14, 0x8aa8c0, 2.4, 0.6, { x: 0, y: 2, z: 0 }, 9);

@@ -355,6 +355,144 @@ export class GameAudio {
     this.noise(this.master, { dur: 1.2, type: 'lowpass', f: 700, f2: 60, gain: 0.5 });
   }
 
+  // ---------- phase 2: desert / hanging woods ----------
+  sandEmerge(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    this.noise(d, { dur: 1.6, type: 'lowpass', f: 500, f2: 120, gain: 0.7, attack: 0.3, brown: true });
+    this.noise(d, { dur: 1.2, type: 'bandpass', f: 2600, q: 0.7, gain: 0.25, attack: 0.2 });
+    this.growl(pos, { pitch: 0.85, dur: 1.4, gain: 0.45 });
+  }
+  ropeSnap(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    this.noise(d, { dur: 0.06, type: 'highpass', f: 1500, gain: 0.8 });
+    this.noise(d, { t: 0.5, dur: 0.3, type: 'lowpass', f: 300, f2: 70, gain: 0.9 });
+  }
+  gurgle(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    for (let i = 0; i < 4; i++) this.tone(d, { t: i * 0.08, f: 180 + Math.random() * 120, f2: 90, dur: 0.07, gain: 0.25, type: 'triangle' });
+    this.noise(d, { dur: 0.4, type: 'bandpass', f: 700, q: 4, gain: 0.3 });
+  }
+  acidSpit(pos) { if (this.ctx) { const d = this.dest(pos); this.noise(d, { dur: 0.18, type: 'bandpass', f: 1800, f2: 600, q: 2, gain: 0.6 }); this.tone(d, { f: 300, f2: 120, dur: 0.12, gain: 0.2 }); } }
+  acidHit(pos) { if (this.ctx) { const d = this.dest(pos); this.noise(d, { dur: 0.5, type: 'highpass', f: 2500, gain: 0.35 }); this.noise(d, { dur: 0.15, type: 'lowpass', f: 700, gain: 0.5 }); } }
+  cultistShout(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    this.tone(d, { f: 220, f2: 160, dur: 0.6, gain: 0.35, type: 'sawtooth', attack: 0.05 });
+    this.noise(d, { dur: 0.6, type: 'bandpass', f: 900, q: 3, gain: 0.3 });
+  }
+  camel(pos, pain = false) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime, d = this.dest(pos), dur = pain ? 0.6 : 1.3;
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(pain ? 220 : 95, t); o.frequency.linearRampToValueAtTime(pain ? 160 : 140, t + dur * 0.4); o.frequency.linearRampToValueAtTime(pain ? 120 : 80, t + dur);
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 22; const lg = ctx.createGain(); lg.gain.value = 18; lfo.connect(lg); lg.connect(o.frequency);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 600; f.Q.value = 2;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.5, t + 0.1); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f); f.connect(g); g.connect(d); o.start(t); o.stop(t + dur + 0.1); lfo.start(t); lfo.stop(t + dur + 0.1);
+  }
+  mummyRoar(pos, wake = false, dying = false) {
+    if (!this.ctx) return;
+    this.growl(pos, { pitch: dying ? 0.3 : 0.38, dur: dying ? 3.2 : wake ? 2.6 : 1.8, gain: 1.0 });
+    this.noise(this.dest(pos), { dur: dying ? 3 : 2, type: 'lowpass', f: 300, f2: 60, gain: 0.6, attack: 0.3, brown: true, rev: 0.8 });
+  }
+  mummyChant(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    for (const [f, k] of [[98, 0], [147, 0.1], [196, 0.2]]) this.tone(d, { t: k, f, f2: f * 0.98, dur: 1.4, gain: 0.25, type: 'sawtooth', attack: 0.3 });
+    this.noise(d, { dur: 1.4, type: 'bandpass', f: 500, q: 2, gain: 0.3, attack: 0.4 });
+  }
+  bandageWhip(pos) { if (this.ctx) { const d = this.dest(pos); this.noise(d, { dur: 0.35, type: 'bandpass', f: 600, f2: 3200, q: 1.5, gain: 0.7 }); this.noise(d, { t: 0.05, dur: 0.25, type: 'highpass', f: 3000, gain: 0.2 }); } }
+  slam(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    this.tone(d, { f: 70, f2: 25, dur: 0.9, gain: 1.2 });
+    this.noise(d, { dur: 1.2, type: 'lowpass', f: 600, f2: 80, gain: 1.0, rev: 0.7, brown: true });
+  }
+  eat() { if (this.ctx) for (let i = 0; i < 4; i++) this.noise(this.master, { t: i * 0.18, dur: 0.1, type: 'bandpass', f: 900 + Math.random() * 900, q: 1.5, gain: 0.45 }); }
+  drink() { if (this.ctx) for (let i = 0; i < 4; i++) this.tone(this.master, { t: i * 0.22, f: 300, f2: 180, dur: 0.15, gain: 0.25 }); }
+  invClick() { if (this.ctx) this.noise(this.master, { dur: 0.04, type: 'bandpass', f: 1500, q: 2, gain: 0.3 }); }
+  zombieBreath(k = 1) {
+    if (!this.ctx) return;
+    this.noise(this.master, { dur: 1.1, type: 'bandpass', f: 380, f2: 220, q: 3, gain: 0.35 * k, attack: 0.4, brown: true });
+    this.tone(this.master, { f: 85, f2: 60, dur: 1.0, gain: 0.18 * k, type: 'sawtooth', attack: 0.3 });
+  }
+  creak(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos), t0 = Math.random() * 0.2;
+    this.tone(d, { t: t0, f: 140 + Math.random() * 60, f2: 220, dur: 0.6, gain: 0.18, type: 'sawtooth', attack: 0.1 });
+    this.noise(d, { t: t0, dur: 0.6, type: 'bandpass', f: 1200, q: 8, gain: 0.12 });
+  }
+  whisper(pos) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    for (let i = 0; i < 6; i++) this.noise(d, { t: i * 0.16, dur: 0.14, type: 'bandpass', f: 2200 + Math.random() * 2500, q: 6, gain: 0.12 });
+  }
+  /** continuous chanting coming from the nearest desert camp (positional) */
+  setChant(pos, k) {
+    if (!this.ctx) return;
+    if (!this.chant) {
+      const ctx = this.ctx, g = ctx.createGain(); g.gain.value = 0;
+      const p = this.panner(pos || { x: 0, y: 0, z: 0 }); p.refDistance = 8; g.connect(p);
+      const voice = (f, det) => {
+        const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+        const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 520; f1.Q.value = 5;
+        const f2 = ctx.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 900; f2.Q.value = 5;
+        const vg = ctx.createGain(); vg.gain.value = 0.25;
+        o.connect(f1); o.connect(f2); f1.connect(vg); f2.connect(vg); vg.connect(g); o.start();
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.35 + Math.random() * 0.2; const lg = ctx.createGain(); lg.gain.value = 260; lfo.connect(lg); lg.connect(f1.frequency); lfo.start();
+        return o;
+      };
+      this.chantVoices = [voice(98, 0), voice(98, 9), voice(147, -6), voice(73.4, 4)];
+      // rhythmic swell
+      const am = ctx.createOscillator(); am.frequency.value = 0.42; const ag = ctx.createGain(); ag.gain.value = 0.35; am.connect(ag); ag.connect(g.gain); am.start();
+      this.chant = { g, p };
+    }
+    if (pos) this.setPos(this.chant.p, pos);
+    this.chant.g.gain.setTargetAtTime(0.6 * k, this.ctx.currentTime, 0.4);
+  }
+  setWind(k) { if (this.windGain) this.windGain.gain.setTargetAtTime(0.5 * k, this.ctx.currentTime, 0.8); }
+
+  dogBark(pos, bite = false) {
+    if (!this.ctx) return;
+    const d = this.dest(pos), n = bite ? 1 : 1 + ((Math.random() * 2) | 0);
+    for (let i = 0; i < n; i++) {
+      const t = i * 0.22, f = 380 + Math.random() * 160;
+      this.tone(d, { t, f, f2: f * 0.55, dur: 0.14, gain: 0.35, type: 'sawtooth' });
+      this.noise(d, { t, dur: 0.12, type: 'bandpass', f: 1100, q: 2, gain: 0.45 });
+    }
+    if (bite) this.noise(d, { t: 0.05, dur: 0.08, type: 'highpass', f: 1800, gain: 0.5 });
+    this.growl(pos, { pitch: 2.1, dur: 0.35, gain: 0.3 });
+  }
+  dogYelp(pos, dead = false) {
+    if (!this.ctx) return;
+    const d = this.dest(pos);
+    this.tone(d, { f: 900, f2: dead ? 250 : 500, dur: dead ? 0.6 : 0.2, gain: 0.35, type: 'triangle' });
+  }
+  wormRoar(pos, dying = false) {
+    if (!this.ctx) return;
+    this.growl(pos, { pitch: dying ? 0.2 : 0.26, dur: dying ? 3.5 : 2.6, gain: 1.2 });
+    const d = this.dest(pos);
+    this.noise(d, { dur: 2.4, type: 'lowpass', f: 400, f2: 50, gain: 1.2, attack: 0.15, brown: true, rev: 0.9 });
+    this.tone(d, { f: 45, f2: 25, dur: 2.2, gain: 0.9, attack: 0.1 });
+  }
+  /** continuous underground rumble of a hunting sand worm (positional) */
+  setRumble(pos, k) {
+    if (!this.ctx) return;
+    if (!this.rumble) {
+      const ctx = this.ctx, g = ctx.createGain(); g.gain.value = 0;
+      const p = this.panner({ x: 0, y: 0, z: 0 }); p.refDistance = 12; g.connect(p);
+      const n = ctx.createBufferSource(); n.buffer = this.brown; n.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140;
+      n.connect(lp); lp.connect(g); n.start();
+      const o = ctx.createOscillator(); o.frequency.value = 32; const og = ctx.createGain(); og.gain.value = 0.5; o.connect(og); og.connect(g); o.start();
+      this.rumble = { g, p };
+    }
+    if (pos) this.setPos(this.rumble.p, pos);
+    this.rumble.g.gain.setTargetAtTime(pos ? 1.6 * k : 0, this.ctx.currentTime, 0.3);
+  }
   // ---------- ambience ----------
   startAmbience() {
     const ctx = this.ctx;
@@ -362,6 +500,7 @@ export class GameAudio {
     const wind = ctx.createBufferSource(); wind.buffer = this.brown; wind.loop = true;
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 380; bp.Q.value = 0.7;
     const wg = ctx.createGain(); wg.gain.value = 0.5;
+    this.windGain = wg;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.11;
     const lg = ctx.createGain(); lg.gain.value = 0.3;
     lfo.connect(lg); lg.connect(wg.gain);

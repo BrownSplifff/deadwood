@@ -6,6 +6,7 @@ export const PCFG = {
   gravity: 22, jump: 6.8, radius: 0.4,
   eyeStand: 1.7, eyeCrouch: 1.15, eyeSit: 0.5,
   maxStamina: 100, maxHealth: 100,
+  staminaDrain: false,   // stamina depletion switched off for now (sprint, jump, infection, holding breath) - set true to re-enable
 };
 
 export class Player {
@@ -41,6 +42,7 @@ export class Player {
 
     let target = PCFG.walk;
     if (this.sprinting) target = PCFG.sprint; else if (crouch) target = PCFG.crouch; else if (ctx.aiming) target = PCFG.ads;
+    target *= ctx.speedMul ?? 1;
     this.inWater = this.world.isWater(this.pos.x, this.pos.z);
     if (this.inWater) target *= 0.55;
     // wish direction
@@ -55,16 +57,21 @@ export class Player {
 
     // stamina
     if (this.sprinting) {
-      this.stamina -= 20 * dt;
+      this.stamina -= 20 * (ctx.drainMul ?? 1) * dt;
       if (this.stamina <= 0) { this.stamina = 0; this.exhausted = true; }
-    } else this.stamina = Math.min(PCFG.maxStamina, this.stamina + (moving ? 12 : 22) * dt);
+    } else this.stamina = Math.min(PCFG.maxStamina, this.stamina + (moving ? 12 : 22) * (ctx.regenMul ?? 1) * dt);
+    // infection gnaws at stamina even when standing still
+    if (ctx.passiveDrain) this.stamina = Math.max(0, this.stamina - ctx.passiveDrain * dt);
 
     // jump + gravity
     if (keys.Space && this.onGround && !sit && ctx.canMove) { this.vy = PCFG.jump; this.onGround = false; this.audio.jump(); this.stamina = Math.max(0, this.stamina - 6); }
+    if (!PCFG.staminaDrain) { this.stamina = PCFG.maxStamina; this.exhausted = false; }
     this.vy -= PCFG.gravity * dt;
     this.pos.x += this.vx * dt; this.pos.z += this.vz * dt; this.pos.y += this.vy * dt;
     this.world.resolve(this.pos, PCFG.radius, this.pos.y);
 
+    const ceil = this.world.ceilingAt ? this.world.ceilingAt(this.pos.x, this.pos.z) : Infinity;
+    if (this.pos.y + 1.95 > ceil) { this.pos.y = ceil - 1.95; if (this.vy > 0) this.vy = 0; }
     const g = this.world.hgt(this.pos.x, this.pos.z);
     if (this.pos.y <= g) {
       if (!this.onGround && this.vy < -7) this.audio.land();

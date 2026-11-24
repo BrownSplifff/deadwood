@@ -14,6 +14,8 @@
 <div id="hud" class="hidden">
   <div id="scope"><div class="reticle"><i class="h"></i><i class="v"></i><b></b></div></div>
   <div id="vignette"></div>
+  <div id="acidvig"></div>
+  <div id="infectvig"></div>
   <div id="lowhp"></div>
   <div id="stats">
     <div class="row"><span class="lbl">WAVE</span><b id="h-wave">1</b></div>
@@ -23,7 +25,7 @@
   </div>
   <div id="banner"></div>
   <div id="area"></div>
-  <div id="bossbar"><span>THE BUTCHER</span><div class="track"><div id="b-boss" class="fill hp"></div></div></div>
+  <div id="bossbar"><span id="bossname">THE BUTCHER</span><div class="track"><div id="b-boss" class="fill hp"></div></div></div>
   <canvas id="minimap"></canvas>
   <div id="maphint">[M] MAP</div>
   <div id="prepbar"></div>
@@ -33,10 +35,12 @@
     <div class="bar"><span class="blbl">HEALTH</span><div class="track"><div id="b-health" class="fill hp"></div></div><b id="t-health">100</b></div>
     <div class="bar"><span class="blbl">STAMINA</span><div class="track"><div id="b-stam" class="fill st"></div></div></div>
     <div class="bar"><span class="blbl">BATTERY</span><div class="track"><div id="b-batt" class="fill bt"></div></div><b id="t-batt">100</b></div>
-    <div id="flashind">[F] FLASHLIGHT <b id="fl-state">ON</b> &nbsp; [B] SPARE BATTERIES <b id="t-spares">1</b></div>
+    <div id="flashind">[F] FLASHLIGHT <b id="fl-state">ON</b> &nbsp; [B] BATTERIES <b id="t-spares">1</b> &nbsp; [H] MEDKITS <b id="t-meds">0</b> &nbsp; [TAB] INVENTORY</div>
+    <div id="infect"><span class="lbl">INFECTION</span><i class="seg"></i><i class="seg"></i><i class="seg"></i><i class="seg"></i><i class="seg"></i><i class="seg"></i><div id="infect-tip"></div></div>
   </div>
   <div id="ammo"><div id="slots"></div><div id="wname">AK RIFLE</div><b id="a-mag">30</b><span> / </span><span id="a-res">120</span><div id="a-hint">RELOAD [R]</div></div>
   <div id="posture"></div>
+  <div id="toast"></div>
 </div>
 
 <!-- ===== SCREENS ===== -->
@@ -67,6 +71,9 @@
       <tr><td>X</td><td>Sit down / stand up</td></tr>
       <tr><td>F</td><td>Flashlight</td></tr>
       <tr><td>B</td><td>Replace flashlight battery</td></tr>
+      <tr><td>H</td><td>Use a medical kit</td></tr>
+      <tr><td>Tab</td><td>Inventory (click select, right-click actions, drag to move)</td></tr>
+      <tr><td>G</td><td>Drop selected item (inventory open)</td></tr>
       <tr><td>M</td><td>Expand map</td></tr>
       <tr><td>Shift (scoped)</td><td>Hold breath</td></tr>
       <tr><td>E</td><td>Collect supplies</td></tr>
@@ -98,12 +105,22 @@
       <div><span>Waves survived</span><b id="d-waves">0</b></div>
       <div><span>Survival time</span><b id="d-time">00:00</b></div>
     </div>
+    <p id="d-cause"></p>
     <div class="buttons">
       <button id="btn-retry" class="big">Restart</button>
       <button id="btn-death-menu">Return to Main Menu</button>
     </div>
   </section>
 </div>
+
+<section id="inventory" class="hidden">
+  <div class="inv-panel">
+    <div class="inv-head"><h2>INVENTORY</h2><button id="inv-close">Close [Tab]</button></div>
+    <div class="inv-body"><div class="inv-grid"></div><div class="inv-info"></div></div>
+    <div class="inv-menu hidden"></div>
+    <div id="inv-confirm" class="hidden"><p><b>WARNING</b><br>A sixth piece of infected flesh will complete the infection.<br>You will turn. This cannot be undone.</p><div><button id="inv-yes">Eat it anyway</button><button id="inv-no">Put it away</button></div></div>
+  </div>
+</section>
 
 <template id="tpl-settings">
   <label class="set"><span>Mouse sensitivity</span><input type="range" class="set-sens" min="0.2" max="3" step="0.05"><output></output></label>
