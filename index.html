@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEADWOOD</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 fill=%27%23070b14%27/%3E%3Cpath d=%27M16 3l7 10h-4l6 9h-6v6h-6v-6H7l6-9H9z%27 fill=%27%23244a2c%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- ===== HUD ===== -->
+<div id="hud" class="hidden">
+  <div id="scope"><div class="reticle"><i class="h"></i><i class="v"></i><b></b></div></div>
+  <div id="vignette"></div>
+  <div id="lowhp"></div>
+  <div id="stats">
+    <div class="row"><span class="lbl">WAVE</span><b id="h-wave">1</b></div>
+    <div class="row"><span class="lbl">ZOMBIES</span><b id="h-left">0</b></div>
+    <div class="row"><span class="lbl">KILLS</span><b id="h-kills">0</b></div>
+    <div class="row"><span class="lbl">TIME</span><b id="h-time">00:00</b></div>
+  </div>
+  <div id="banner"></div>
+  <div id="area"></div>
+  <div id="bossbar"><span>THE BUTCHER</span><div class="track"><div id="b-boss" class="fill hp"></div></div></div>
+  <canvas id="minimap"></canvas>
+  <div id="maphint">[M] MAP</div>
+  <div id="prepbar"></div>
+  <div id="crosshair"><i></i><i></i><i></i><i></i><div id="hitmarker"></div></div>
+  <div id="prompt"></div>
+  <div id="bars">
+    <div class="bar"><span class="blbl">HEALTH</span><div class="track"><div id="b-health" class="fill hp"></div></div><b id="t-health">100</b></div>
+    <div class="bar"><span class="blbl">STAMINA</span><div class="track"><div id="b-stam" class="fill st"></div></div></div>
+    <div class="bar"><span class="blbl">BATTERY</span><div class="track"><div id="b-batt" class="fill bt"></div></div><b id="t-batt">100</b></div>
+    <div id="flashind">[F] FLASHLIGHT <b id="fl-state">ON</b> &nbsp; [B] SPARE BATTERIES <b id="t-spares">1</b></div>
+  </div>
+  <div id="ammo"><div id="slots"></div><div id="wname">AK RIFLE</div><b id="a-mag">30</b><span> / </span><span id="a-res">120</span><div id="a-hint">RELOAD [R]</div></div>
+  <div id="posture"></div>
+</div>
+
+<!-- ===== SCREENS ===== -->
+<div id="screens">
+  <section id="menu" class="screen">
+    <h1 class="title">DEADWOOD</h1>
+    <p class="tag">The forest remembers. The dead do not rest.</p>
+    <div class="buttons">
+      <button id="btn-play" class="big">Play Game</button>
+      <button id="btn-controls">Controls</button>
+      <button id="btn-settings">Settings</button>
+    </div>
+    <p class="foot">Best on a desktop browser · headphones recommended</p>
+  </section>
+
+  <section id="controls" class="screen hidden">
+    <h2>Controls</h2>
+    <table class="keys">
+      <tr><td>W A S D</td><td>Move</td></tr>
+      <tr><td>Mouse</td><td>Look / aim</td></tr>
+      <tr><td>Left click</td><td>Shoot (hold for auto fire)</td></tr>
+      <tr><td>Right click</td><td>Aim down sights / scope</td></tr>
+      <tr><td>1 2 3 / Wheel</td><td>Rifle, Glock, Sniper</td></tr>
+      <tr><td>R</td><td>Reload</td></tr>
+      <tr><td>Shift</td><td>Sprint</td></tr>
+      <tr><td>Space</td><td>Jump</td></tr>
+      <tr><td>Ctrl (or C)</td><td>Crouch (hold)</td></tr>
+      <tr><td>X</td><td>Sit down / stand up</td></tr>
+      <tr><td>F</td><td>Flashlight</td></tr>
+      <tr><td>B</td><td>Replace flashlight battery</td></tr>
+      <tr><td>M</td><td>Expand map</td></tr>
+      <tr><td>Shift (scoped)</td><td>Hold breath</td></tr>
+      <tr><td>E</td><td>Collect supplies</td></tr>
+      <tr><td>Esc</td><td>Pause</td></tr>
+    </table>
+    <div class="buttons"><button class="back" data-back="menu">Back</button></div>
+  </section>
+
+  <section id="settings" class="screen hidden">
+    <h2>Settings</h2>
+    <div class="settings-block"></div>
+    <div class="buttons"><button class="back" data-back="menu">Back</button></div>
+  </section>
+
+  <section id="pause" class="screen hidden">
+    <h2>Paused</h2>
+    <div class="buttons">
+      <button id="btn-resume" class="big">Resume</button>
+      <button id="btn-restart">Restart</button>
+    </div>
+    <div class="settings-block"></div>
+    <div class="buttons"><button id="btn-quit">Return to Main Menu</button></div>
+  </section>
+
+  <section id="death" class="screen hidden">
+    <h1 class="title red">GAME OVER</h1>
+    <div class="stats-grid">
+      <div><span>Total kills</span><b id="d-kills">0</b></div>
+      <div><span>Waves survived</span><b id="d-waves">0</b></div>
+      <div><span>Survival time</span><b id="d-time">00:00</b></div>
+    </div>
+    <div class="buttons">
+      <button id="btn-retry" class="big">Restart</button>
+      <button id="btn-death-menu">Return to Main Menu</button>
+    </div>
+  </section>
+</div>
+
+<template id="tpl-settings">
+  <label class="set"><span>Mouse sensitivity</span><input type="range" class="set-sens" min="0.2" max="3" step="0.05"><output></output></label>
+  <label class="set"><span>Volume</span><input type="range" class="set-vol" min="0" max="1" step="0.05"><output></output></label>
+  <div class="set"><span>Graphics quality</span>
+    <div class="seg"><button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button></div>
+  </div>
+</template>
+
+<noscript><p style="color:#ccc;padding:2em">DEADWOOD needs JavaScript.</p></noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
